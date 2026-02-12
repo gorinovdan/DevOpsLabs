@@ -7,7 +7,7 @@
 FlowBoard - учебное full-stack приложение для управления задачами с REST API, БД и CI. Проект иллюстрирует практики DevOps: автоматизация сборки/тестов, единый жизненный цикл кода, контроль версий и повторяемые окружения. Тема приложения согласовывается с преподавателем.
 
 ## Стек
-- Backend: Go 1.25, Gin, GORM, SQLite
+- Backend: Go 1.25, Gin, GORM, PostgreSQL
 - Frontend: React 18, Mantine, Vite, TypeScript
 - Тесты: Go `testing` + `testify`, Vitest + Testing Library
 - CI: GitHub Actions (4 job-а: build/test для backend и frontend)
@@ -37,6 +37,7 @@ git config --list
 - Git
 - Go 1.25+
 - Node.js 20+
+- PostgreSQL 16+ (или запуск через Docker Compose)
 
 ### Backend
 ```bash
@@ -45,7 +46,8 @@ go run ./cmd/server
 ```
 Переменные окружения:
 - `PORT` - порт сервера (по умолчанию `8080`)
-- `DB_PATH` - путь к SQLite базе (по умолчанию `data/app.db`)
+- `DB_DSN` - DSN подключения к PostgreSQL
+  (по умолчанию `host=localhost user=postgres password=postgres dbname=flowboard port=5432 sslmode=disable TimeZone=UTC`)
 
 ### Frontend
 ```bash
@@ -62,7 +64,7 @@ Backend:
 cd backend
 go test ./...
 ```
-Интеграционные тесты находятся в `backend/tests`.
+Серверные тесты находятся в `backend/internal/**/_test.go` и `backend/tests`.
 
 Frontend:
 ```bash
@@ -78,12 +80,13 @@ docker compose up --build
 ```
 - Frontend: `http://localhost:5173`
 - Backend API: `http://localhost:8080`
+- PostgreSQL: `localhost:5432`
 
 Остановка:
 ```bash
 docker compose down
 ```
-Данные SQLite сохраняются в Docker volume `backend-data`.
+Данные PostgreSQL сохраняются в Docker volume `postgres-data`.
 
 ## REST API
 Базовый URL: `http://localhost:8080`
@@ -124,6 +127,11 @@ Workflow находится в `/.github/workflows/ci.yml`. Включает 4 �
 - `backend-test`
 - `frontend-build`
 - `frontend-test`
+
+Дополнительно:
+- backend test job запускает `go test -race -covermode=atomic -coverprofile=coverage.out ./...`
+- frontend test job запускает `vitest` с coverage и порогами `100%`
+- покрытия backend/frontend сохраняются как артефакты GitHub Actions
 
 ## Репозиторий и Git
 Проект готов к публикации в GitHub/GitLab. В корне есть `.gitignore` для Go и Node.js, а все команды запуска и тестов воспроизводимы локально и в CI.

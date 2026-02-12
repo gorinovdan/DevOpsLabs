@@ -36,7 +36,7 @@ func main() {
 func run() error {
 	cfg := config.Load()
 
-	database, err := connectDB(cfg.DBPath)
+	database, err := connectDB(cfg.DBDSN)
 	if err != nil {
 		return err
 	}
