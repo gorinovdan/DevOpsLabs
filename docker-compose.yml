@@ -1,14 +1,31 @@
 services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: flowboard
+      POSTGRES_PASSWORD: flowboard
+      POSTGRES_DB: flowboard
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U flowboard -d flowboard"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
   backend:
     build:
       context: ./backend
     environment:
       PORT: "8080"
-      DB_PATH: /data/app.db
+      DB_DSN: host=postgres user=flowboard password=flowboard dbname=flowboard port=5432 sslmode=disable TimeZone=UTC
+    depends_on:
+      postgres:
+        condition: service_healthy
     ports:
       - "8080:8080"
-    volumes:
-      - backend-data:/data
 
   frontend:
     build:
@@ -21,4 +38,4 @@ services:
       - "5173:80"
 
 volumes:
-  backend-data:
+  postgres-data:

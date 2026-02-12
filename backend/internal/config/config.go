@@ -3,8 +3,8 @@ package config
 import "os"
 
 type Config struct {
-	Port   string
-	DBPath string
+	Port  string
+	DBDSN string
 }
 
 func Load() Config {
@@ -13,13 +13,13 @@ func Load() Config {
 		port = "8080"
 	}
 
-	dbPath := os.Getenv("DB_PATH")
-	if dbPath == "" {
-		dbPath = "data/app.db"
+	dbDSN := os.Getenv("DB_DSN")
+	if dbDSN == "" {
+		dbDSN = "host=localhost user=postgres password=postgres dbname=flowboard port=5432 sslmode=disable TimeZone=UTC"
 	}
 
 	return Config{
-		Port:   port,
-		DBPath: dbPath,
+		Port:  port,
+		DBDSN: dbDSN,
 	}
 }

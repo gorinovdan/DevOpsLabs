@@ -421,7 +421,7 @@ func parseDueDatePatch(raw json.RawMessage) (bool, *time.Time, error) {
 	}
 	var value string
 	if err := json.Unmarshal(raw, &value); err != nil {
-		return true, nil, fmt.Errorf("некорректный список тегов")
+		return true, nil, fmt.Errorf("некорректное значение даты")
 	}
 	parsed, err := time.Parse(time.RFC3339, strings.TrimSpace(value))
 	if err != nil {

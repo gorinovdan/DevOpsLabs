@@ -2,27 +2,34 @@ package database
 
 import (
 	"fmt"
-	"os"
-	"path/filepath"
+	"strings"
 
-	"gorm.io/driver/sqlite"
+	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
 )
 
-var mkdirAll = os.MkdirAll
 var openGorm = gorm.Open
+var pingDB = func(database *gorm.DB) error {
+	sqlDB, err := database.DB()
+	if err != nil {
+		return err
+	}
+	return sqlDB.Ping()
+}
 
-func Connect(dbPath string) (*gorm.DB, error) {
-	dir := filepath.Dir(dbPath)
-	if dir != "." {
-		if err := mkdirAll(dir, 0o755); err != nil {
-			return nil, fmt.Errorf("не удалось создать каталог базы данных: %w", err)
-		}
+func Connect(dbDSN string) (*gorm.DB, error) {
+	dsn := strings.TrimSpace(dbDSN)
+	if dsn == "" {
+		return nil, fmt.Errorf("не задан DSN базы данных")
 	}
 
-	db, err := openGorm(sqlite.Open(dbPath), &gorm.Config{})
+	db, err := openGorm(postgres.Open(dsn), &gorm.Config{})
 	if err != nil {
 		return nil, fmt.Errorf("не удалось открыть базу данных: %w", err)
+	}
+
+	if err := pingDB(db); err != nil {
+		return nil, fmt.Errorf("не удалось проверить соединение с базой данных: %w", err)
 	}
 
 	return db, nil

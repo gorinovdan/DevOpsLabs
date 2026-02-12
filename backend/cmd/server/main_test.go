@@ -2,7 +2,6 @@ package main
 
 import (
 	"errors"
-	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -11,7 +10,7 @@ import (
 
 func TestRunSuccess(t *testing.T) {
 	t.Setenv("PORT", "0")
-	t.Setenv("DB_PATH", filepath.Join(t.TempDir(), "app.db"))
+	t.Setenv("DB_DSN", "host=db user=demo password=secret dbname=demo port=5432 sslmode=disable")
 
 	originalStart := startServer
 	originalConnect := connectDB
@@ -19,7 +18,9 @@ func TestRunSuccess(t *testing.T) {
 	startServer = func(addr string, router Router) error {
 		return nil
 	}
-	connectDB = originalConnect
+	connectDB = func(path string) (*gorm.DB, error) {
+		return &gorm.DB{}, nil
+	}
 	migrateDB = func(database *gorm.DB) error {
 		return nil
 	}
@@ -34,7 +35,7 @@ func TestRunSuccess(t *testing.T) {
 
 func TestRunStartError(t *testing.T) {
 	t.Setenv("PORT", "0")
-	t.Setenv("DB_PATH", filepath.Join(t.TempDir(), "app.db"))
+	t.Setenv("DB_DSN", "host=db user=demo password=secret dbname=demo port=5432 sslmode=disable")
 
 	originalStart := startServer
 	originalConnect := connectDB
@@ -42,7 +43,9 @@ func TestRunStartError(t *testing.T) {
 	startServer = func(addr string, router Router) error {
 		return errors.New("boom")
 	}
-	connectDB = originalConnect
+	connectDB = func(path string) (*gorm.DB, error) {
+		return &gorm.DB{}, nil
+	}
 	migrateDB = func(database *gorm.DB) error {
 		return nil
 	}
@@ -57,7 +60,7 @@ func TestRunStartError(t *testing.T) {
 
 func TestRunConnectError(t *testing.T) {
 	t.Setenv("PORT", "0")
-	t.Setenv("DB_PATH", filepath.Join(t.TempDir(), "app.db"))
+	t.Setenv("DB_DSN", "host=db user=demo password=secret dbname=demo port=5432 sslmode=disable")
 
 	originalStart := startServer
 	originalConnect := connectDB
@@ -82,7 +85,7 @@ func TestRunConnectError(t *testing.T) {
 
 func TestRunMigrateError(t *testing.T) {
 	t.Setenv("PORT", "0")
-	t.Setenv("DB_PATH", filepath.Join(t.TempDir(), "app.db"))
+	t.Setenv("DB_DSN", "host=db user=demo password=secret dbname=demo port=5432 sslmode=disable")
 
 	originalStart := startServer
 	originalConnect := connectDB
@@ -90,7 +93,9 @@ func TestRunMigrateError(t *testing.T) {
 	startServer = func(addr string, router Router) error {
 		return nil
 	}
-	connectDB = originalConnect
+	connectDB = func(path string) (*gorm.DB, error) {
+		return &gorm.DB{}, nil
+	}
 	migrateDB = func(database *gorm.DB) error {
 		return errors.New("migrate fail")
 	}
@@ -105,7 +110,7 @@ func TestRunMigrateError(t *testing.T) {
 
 func TestMainExitOnError(t *testing.T) {
 	t.Setenv("PORT", "0")
-	t.Setenv("DB_PATH", filepath.Join(t.TempDir(), "app.db"))
+	t.Setenv("DB_DSN", "host=db user=demo password=secret dbname=demo port=5432 sslmode=disable")
 
 	originalStart := startServer
 	originalConnect := connectDB
@@ -113,7 +118,9 @@ func TestMainExitOnError(t *testing.T) {
 	startServer = func(addr string, router Router) error {
 		return errors.New("boom")
 	}
-	connectDB = originalConnect
+	connectDB = func(path string) (*gorm.DB, error) {
+		return &gorm.DB{}, nil
+	}
 	migrateDB = func(database *gorm.DB) error {
 		return nil
 	}
@@ -135,7 +142,7 @@ func TestMainExitOnError(t *testing.T) {
 
 func TestMainSuccess(t *testing.T) {
 	t.Setenv("PORT", "0")
-	t.Setenv("DB_PATH", filepath.Join(t.TempDir(), "app.db"))
+	t.Setenv("DB_DSN", "host=db user=demo password=secret dbname=demo port=5432 sslmode=disable")
 
 	originalStart := startServer
 	originalConnect := connectDB
@@ -143,7 +150,9 @@ func TestMainSuccess(t *testing.T) {
 	startServer = func(addr string, router Router) error {
 		return nil
 	}
-	connectDB = originalConnect
+	connectDB = func(path string) (*gorm.DB, error) {
+		return &gorm.DB{}, nil
+	}
 	migrateDB = func(database *gorm.DB) error {
 		return nil
 	}

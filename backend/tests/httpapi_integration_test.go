@@ -2,11 +2,14 @@ package tests
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -16,7 +19,6 @@ import (
 	"devopslabs/internal/transport/httpapi"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
-	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 )
 
@@ -38,18 +40,134 @@ type taskResponse struct {
 	Score       float64    `json:"score"`
 }
 
+type inMemoryTaskStore struct {
+	mu     sync.Mutex
+	tasks  map[uint]domain.Task
+	nextID uint
+}
+
+func newInMemoryTaskStore() *inMemoryTaskStore {
+	return &inMemoryTaskStore{
+		tasks:  make(map[uint]domain.Task),
+		nextID: 1,
+	}
+}
+
+func (s *inMemoryTaskStore) List(_ context.Context, filter repository.TaskFilter) ([]domain.Task, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	statusSet := make(map[string]bool, len(filter.Statuses))
+	for _, status := range filter.Statuses {
+		statusSet[strings.ToLower(status)] = true
+	}
+
+	prioritySet := make(map[string]bool, len(filter.Priorities))
+	for _, priority := range filter.Priorities {
+		prioritySet[strings.ToLower(priority)] = true
+	}
+
+	query := strings.ToLower(strings.TrimSpace(filter.Query))
+	tag := strings.ToLower(strings.TrimSpace(filter.Tag))
+
+	result := make([]domain.Task, 0, len(s.tasks))
+	for _, task := range s.tasks {
+		if len(statusSet) > 0 && !statusSet[strings.ToLower(task.Status)] {
+			continue
+		}
+		if len(prioritySet) > 0 && !prioritySet[strings.ToLower(task.Priority)] {
+			continue
+		}
+		if filter.Owner != "" && task.Owner != filter.Owner {
+			continue
+		}
+		if query != "" {
+			text := strings.ToLower(task.Title + " " + task.Description)
+			if !strings.Contains(text, query) {
+				continue
+			}
+		}
+		if tag != "" {
+			matched := false
+			for _, value := range task.Tags {
+				if strings.ToLower(value) == tag {
+					matched = true
+					break
+				}
+			}
+			if !matched {
+				continue
+			}
+		}
+
+		result = append(result, task)
+	}
+
+	sort.Slice(result, func(i, j int) bool {
+		return result[i].ID < result[j].ID
+	})
+
+	return result, nil
+}
+
+func (s *inMemoryTaskStore) Get(_ context.Context, id uint) (*domain.Task, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	task, ok := s.tasks[id]
+	if !ok {
+		return nil, gorm.ErrRecordNotFound
+	}
+	copyTask := task
+	return &copyTask, nil
+}
+
+func (s *inMemoryTaskStore) Create(_ context.Context, task *domain.Task) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if task.ID == 0 {
+		task.ID = s.nextID
+		s.nextID++
+	}
+
+	now := time.Now().UTC()
+	if task.CreatedAt.IsZero() {
+		task.CreatedAt = now
+	}
+	task.UpdatedAt = now
+
+	s.tasks[task.ID] = *task
+	return nil
+}
+
+func (s *inMemoryTaskStore) Update(_ context.Context, task *domain.Task) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if _, exists := s.tasks[task.ID]; !exists {
+		return gorm.ErrRecordNotFound
+	}
+
+	task.UpdatedAt = time.Now().UTC()
+	s.tasks[task.ID] = *task
+	return nil
+}
+
+func (s *inMemoryTaskStore) Delete(_ context.Context, id uint) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	delete(s.tasks, id)
+	return nil
+}
+
 func setupTestRouter(t *testing.T) (*gin.Engine, service.FixedClock) {
 	t.Helper()
 	gin.SetMode(gin.TestMode)
 
-	dsn := "file:" + strings.ReplaceAll(t.Name(), "/", "_") + "?mode=memory&cache=shared"
-	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{})
-	require.NoError(t, err)
-
-	require.NoError(t, db.AutoMigrate(&domain.Task{}))
-
 	clock := service.FixedClock{NowValue: time.Date(2026, 2, 6, 12, 0, 0, 0, time.UTC)}
-	taskStore := repository.NewGormTaskStore(db)
+	taskStore := newInMemoryTaskStore()
 	h := httpapi.NewTaskHandler(taskStore, clock)
 
 	r := gin.New()
@@ -240,12 +358,7 @@ func TestTaskHandlerErrors(t *testing.T) {
 }
 
 func TestRouterHealthAndCORS(t *testing.T) {
-	dsn := "file:" + strings.ReplaceAll(t.Name(), "/", "_") + "?mode=memory&cache=shared"
-	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{})
-	require.NoError(t, err)
-	require.NoError(t, db.AutoMigrate(&domain.Task{}))
-
-	taskStore := repository.NewGormTaskStore(db)
+	taskStore := newInMemoryTaskStore()
 	router := httpapi.NewRouter(taskStore)
 
 	req := httptest.NewRequest(http.MethodGet, "/health", nil)
