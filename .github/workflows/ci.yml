@@ -3,11 +3,21 @@ name: CI/CD
 on:
   push:
     branches: ["main", "master"]
+    paths-ignore:
+      - "**/*.md"
+      - "docs/**"
   pull_request:
+    paths-ignore:
+      - "**/*.md"
+      - "docs/**"
   workflow_dispatch:
 
 permissions:
   contents: read
+
+concurrency:
+  group: ci-cd-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 env:
   GO_VERSION: "1.25.x"
@@ -16,32 +26,87 @@ env:
   DEPLOY_USER: "root"
 
 jobs:
-  backend-build:
+  changes:
     runs-on: ubuntu-latest
+    outputs:
+      backend: ${{ steps.filter.outputs.backend }}
+      frontend: ${{ steps.filter.outputs.frontend }}
+      infra: ${{ steps.filter.outputs.infra }}
+      ci: ${{ steps.filter.outputs.ci }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Detect changed paths
+        id: filter
+        uses: dorny/paths-filter@v3
+        with:
+          filters: |
+            backend:
+              - 'backend/**'
+            frontend:
+              - 'frontend/**'
+            infra:
+              - 'infra/**'
+              - 'deploy/**'
+              - 'docker-compose*.yml'
+              - 'scripts/**'
+            ci:
+              - '.github/workflows/**'
+
+  backend-build:
+    runs-on: ubuntu-latest
+    needs: changes
+    env:
+      RUN_BACKEND: ${{ github.event_name == 'workflow_dispatch' || needs.changes.outputs.backend == 'true' || needs.changes.outputs.ci == 'true' }}
+    steps:
+      - uses: actions/checkout@v4
+        if: env.RUN_BACKEND == 'true'
+
+      - name: Backend build skipped
+        if: env.RUN_BACKEND != 'true'
+        run: echo "No backend or CI changes detected, skipping backend build."
+
       - uses: actions/setup-go@v5
+        if: env.RUN_BACKEND == 'true'
         with:
           go-version: ${{ env.GO_VERSION }}
           cache: true
           cache-dependency-path: backend/go.sum
+
       - name: Build backend
+        if: env.RUN_BACKEND == 'true'
         working-directory: backend
         run: go build ./...
 
   backend-test:
     runs-on: ubuntu-latest
+    needs: changes
+    env:
+      RUN_BACKEND: ${{ github.event_name == 'workflow_dispatch' || needs.changes.outputs.backend == 'true' || needs.changes.outputs.ci == 'true' }}
     steps:
       - uses: actions/checkout@v4
+        if: env.RUN_BACKEND == 'true'
+
+      - name: Backend tests skipped
+        if: env.RUN_BACKEND != 'true'
+        run: echo "No backend or CI changes detected, skipping backend tests."
+
       - uses: actions/setup-go@v5
+        if: env.RUN_BACKEND == 'true'
         with:
           go-version: ${{ env.GO_VERSION }}
           cache: true
           cache-dependency-path: backend/go.sum
+
       - name: Test backend
+        if: env.RUN_BACKEND == 'true'
         working-directory: backend
         run: go test -race -covermode=atomic -coverprofile=coverage.out ./...
+
       - name: Upload backend coverage
+        if: env.RUN_BACKEND == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: backend-coverage
@@ -49,36 +114,82 @@ jobs:
 
   frontend-build:
     runs-on: ubuntu-latest
+    needs: changes
+    env:
+      RUN_FRONTEND: ${{ github.event_name == 'workflow_dispatch' || needs.changes.outputs.frontend == 'true' || needs.changes.outputs.ci == 'true' }}
     steps:
       - uses: actions/checkout@v4
+        if: env.RUN_FRONTEND == 'true'
+
+      - name: Frontend build skipped
+        if: env.RUN_FRONTEND != 'true'
+        run: echo "No frontend or CI changes detected, skipping frontend build."
+
       - uses: actions/setup-node@v4
+        if: env.RUN_FRONTEND == 'true'
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: "npm"
           cache-dependency-path: frontend/package-lock.json
+
+      - name: Restore frontend node_modules cache
+        if: env.RUN_FRONTEND == 'true'
+        id: frontend-node-modules-cache
+        uses: actions/cache@v4
+        with:
+          path: frontend/node_modules
+          key: ${{ runner.os }}-node${{ env.NODE_VERSION }}-frontend-modules-${{ hashFiles('frontend/package-lock.json') }}
+
       - name: Install frontend deps
+        if: env.RUN_FRONTEND == 'true' && steps.frontend-node-modules-cache.outputs.cache-hit != 'true'
         working-directory: frontend
-        run: npm ci
+        run: npm ci --prefer-offline
+
       - name: Build frontend
+        if: env.RUN_FRONTEND == 'true'
         working-directory: frontend
         run: npm run build
 
   frontend-test:
     runs-on: ubuntu-latest
+    needs: changes
+    env:
+      RUN_FRONTEND: ${{ github.event_name == 'workflow_dispatch' || needs.changes.outputs.frontend == 'true' || needs.changes.outputs.ci == 'true' }}
     steps:
       - uses: actions/checkout@v4
+        if: env.RUN_FRONTEND == 'true'
+
+      - name: Frontend tests skipped
+        if: env.RUN_FRONTEND != 'true'
+        run: echo "No frontend or CI changes detected, skipping frontend tests."
+
       - uses: actions/setup-node@v4
+        if: env.RUN_FRONTEND == 'true'
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: "npm"
           cache-dependency-path: frontend/package-lock.json
+
+      - name: Restore frontend node_modules cache
+        if: env.RUN_FRONTEND == 'true'
+        id: frontend-node-modules-cache
+        uses: actions/cache@v4
+        with:
+          path: frontend/node_modules
+          key: ${{ runner.os }}-node${{ env.NODE_VERSION }}-frontend-modules-${{ hashFiles('frontend/package-lock.json') }}
+
       - name: Install frontend deps
+        if: env.RUN_FRONTEND == 'true' && steps.frontend-node-modules-cache.outputs.cache-hit != 'true'
         working-directory: frontend
-        run: npm ci
+        run: npm ci --prefer-offline
+
       - name: Test frontend
+        if: env.RUN_FRONTEND == 'true'
         working-directory: frontend
         run: npm test
+
       - name: Upload frontend coverage
+        if: env.RUN_FRONTEND == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: frontend-coverage
@@ -87,15 +198,19 @@ jobs:
   docker-publish:
     runs-on: ubuntu-latest
     if: github.event_name != 'pull_request'
-    needs: [backend-build, backend-test, frontend-build, frontend-test]
+    needs: [changes, backend-build, backend-test, frontend-build, frontend-test]
     permissions:
       contents: read
       packages: write
+    env:
+      RUN_BACKEND_IMAGE: ${{ github.event_name == 'workflow_dispatch' || needs.changes.outputs.backend == 'true' || needs.changes.outputs.ci == 'true' }}
+      RUN_FRONTEND_IMAGE: ${{ github.event_name == 'workflow_dispatch' || needs.changes.outputs.frontend == 'true' || needs.changes.outputs.ci == 'true' }}
     outputs:
       backend_image: ${{ steps.meta.outputs.backend_image }}
       frontend_image: ${{ steps.meta.outputs.frontend_image }}
     steps:
       - uses: actions/checkout@v4
+        if: env.RUN_BACKEND_IMAGE == 'true' || env.RUN_FRONTEND_IMAGE == 'true'
 
       - name: Compute image names
         id: meta
@@ -104,11 +219,18 @@ jobs:
           repo_lc="$(echo "${GITHUB_REPOSITORY}" | tr '[:upper:]' '[:lower:]')"
           {
             echo "repo_lc=${repo_lc}"
-            echo "backend_image=ghcr.io/${repo_lc}/backend:${GITHUB_SHA}"
-            echo "frontend_image=ghcr.io/${repo_lc}/frontend:${GITHUB_SHA}"
+            echo "backend_image=ghcr.io/${repo_lc}/backend:latest"
+            echo "frontend_image=ghcr.io/${repo_lc}/frontend:latest"
+            echo "backend_image_sha=ghcr.io/${repo_lc}/backend:${GITHUB_SHA}"
+            echo "frontend_image_sha=ghcr.io/${repo_lc}/frontend:${GITHUB_SHA}"
           } >> "$GITHUB_OUTPUT"
 
+      - name: Docker image build skipped
+        if: env.RUN_BACKEND_IMAGE != 'true' && env.RUN_FRONTEND_IMAGE != 'true'
+        run: echo "No backend/frontend or CI changes detected, skipping Docker image rebuild."
+
       - name: Login to GHCR
+        if: env.RUN_BACKEND_IMAGE == 'true' || env.RUN_FRONTEND_IMAGE == 'true'
         uses: docker/login-action@v3
         with:
           registry: ghcr.io
@@ -116,27 +238,33 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Build and push backend image
+        if: env.RUN_BACKEND_IMAGE == 'true'
         uses: docker/build-push-action@v6
         with:
           context: ./backend
           push: true
           tags: |
+            ${{ steps.meta.outputs.backend_image_sha }}
             ${{ steps.meta.outputs.backend_image }}
-            ghcr.io/${{ steps.meta.outputs.repo_lc }}/backend:latest
+          cache-from: type=gha,scope=backend-image
+          cache-to: type=gha,mode=max,scope=backend-image
 
       - name: Build and push frontend image
+        if: env.RUN_FRONTEND_IMAGE == 'true'
         uses: docker/build-push-action@v6
         with:
           context: ./frontend
           push: true
           tags: |
+            ${{ steps.meta.outputs.frontend_image_sha }}
             ${{ steps.meta.outputs.frontend_image }}
-            ghcr.io/${{ steps.meta.outputs.repo_lc }}/frontend:latest
+          cache-from: type=gha,scope=frontend-image
+          cache-to: type=gha,mode=max,scope=frontend-image
 
   deploy-production:
     runs-on: ubuntu-latest
-    if: github.event_name != 'pull_request'
-    needs: docker-publish
+    if: github.event_name != 'pull_request' && (github.event_name == 'workflow_dispatch' || needs.changes.outputs.backend == 'true' || needs.changes.outputs.frontend == 'true' || needs.changes.outputs.infra == 'true' || needs.changes.outputs.ci == 'true')
+    needs: [changes, docker-publish]
     environment: production
     permissions:
       contents: read
@@ -174,7 +302,6 @@ jobs:
             mkdir -p "${HOME}/.ssh"
             chmod 700 "${HOME}/.ssh"
             key="${DEPLOY_SSH_KEY}"
-            # Tolerate accidental wrapping quotes and Windows CRLF in GitHub Secret value.
             key="${key%\"}"
             key="${key#\"}"
             key="${key//$'\r'/}"
