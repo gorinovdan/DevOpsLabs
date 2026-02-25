@@ -10,3 +10,6 @@
 **/*.db-shm
 /data
 /tests
+.git
+.gitignore
+README.md

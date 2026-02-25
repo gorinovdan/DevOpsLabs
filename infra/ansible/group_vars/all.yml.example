@@ -1,0 +1,14 @@
+deploy_dir: /opt/flowboard
+compose_file_name: docker-compose.prod.yml
+
+backend_image: ttl.sh/flowboard-backend:24h
+frontend_image: ttl.sh/flowboard-frontend:24h
+
+db_user: flowboard
+db_password: flowboard
+db_name: flowboard
+
+# Optional private registry auth
+registry_url: ""
+registry_username: ""
+registry_password: ""

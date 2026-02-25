@@ -24,4 +24,15 @@ Thumbs.db
 coverage.out
 frontend/coverage/
 
+# Terraform
+.terraform/
+*.tfstate
+*.tfstate.*
+infra/terraform/terraform.auto.tfvars
+
+# Infra local secrets
+infra/ansible/inventory.ini
+infra/ansible/group_vars/all.yml
+infra/compose.env
+
 AGENTS.md

@@ -1,0 +1,17 @@
+# You can keep twc_token empty and set environment variable TWC_TOKEN instead.
+# twc_token = "<TIMEWEB_API_TOKEN>"
+
+server_name = "flowboard-lab-vm"
+location    = "ru-1"
+
+# Adjust VM size if needed.
+cpu     = 1
+ram_mb  = 1024
+disk_mb = 15360
+
+# Optional existing project ID. Leave empty to use default project.
+project_id = ""
+
+# Path to public SSH key on the machine where terraform is executed.
+ssh_key_name        = "flowboard-lab-key"
+ssh_public_key_path = "~/.ssh/id_ed25519.pub"

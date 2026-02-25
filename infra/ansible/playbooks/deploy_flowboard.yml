@@ -1,0 +1,58 @@
+---
+- name: Deploy FlowBoard with Docker Compose
+  hosts: app
+  become: true
+  gather_facts: true
+
+  vars:
+    local_compose_path: "{{ playbook_dir }}/../../../deploy/docker-compose.prod.yml"
+
+  tasks:
+    - name: Ensure deploy directory exists
+      ansible.builtin.file:
+        path: "{{ deploy_dir }}"
+        state: directory
+        mode: "0755"
+
+    - name: Upload production docker-compose file
+      ansible.builtin.copy:
+        src: "{{ local_compose_path }}"
+        dest: "{{ deploy_dir }}/{{ compose_file_name }}"
+        mode: "0644"
+
+    - name: Render compose env file
+      ansible.builtin.template:
+        src: "{{ playbook_dir }}/../templates/compose.env.j2"
+        dest: "{{ deploy_dir }}/compose.env"
+        mode: "0600"
+
+    - name: Login to Docker registry when credentials are provided
+      ansible.builtin.shell: |
+        set -euo pipefail
+        echo "{{ registry_password }}" | docker login "{{ registry_url }}" --username "{{ registry_username }}" --password-stdin
+      when:
+        - registry_url | length > 0
+        - registry_username | length > 0
+        - registry_password | length > 0
+      no_log: true
+
+    - name: Pull latest images
+      ansible.builtin.command: docker compose --env-file compose.env -f {{ compose_file_name }} pull
+      args:
+        chdir: "{{ deploy_dir }}"
+
+    - name: Start application stack
+      ansible.builtin.command: docker compose --env-file compose.env -f {{ compose_file_name }} up -d
+      args:
+        chdir: "{{ deploy_dir }}"
+
+    - name: Show stack status
+      ansible.builtin.command: docker compose --env-file compose.env -f {{ compose_file_name }} ps
+      args:
+        chdir: "{{ deploy_dir }}"
+      changed_when: false
+      register: compose_ps
+
+    - name: Print stack status
+      ansible.builtin.debug:
+        var: compose_ps.stdout_lines
