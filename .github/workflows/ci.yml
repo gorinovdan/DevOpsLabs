@@ -188,6 +188,32 @@ jobs:
             echo "key_file=" >> "$GITHUB_OUTPUT"
           fi
 
+      - name: Probe SSH auth method
+        id: auth
+        env:
+          DEPLOY_PASSWORD: ${{ secrets.DEPLOY_PASSWORD }}
+          USE_KEY: ${{ steps.key.outputs.use_key }}
+          KEY_FILE: ${{ steps.key.outputs.key_file }}
+        run: |
+          set -euo pipefail
+          if [[ "${USE_KEY}" == "true" ]]; then
+            if ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new -o ConnectTimeout=8 -i "${KEY_FILE}" "${DEPLOY_USER}@${DEPLOY_HOST}" "echo ok" >/dev/null 2>&1; then
+              echo "resolved_auth=key" >> "$GITHUB_OUTPUT"
+            elif [[ -n "${DEPLOY_PASSWORD}" ]]; then
+              echo "SSH key auth failed, falling back to password auth."
+              echo "resolved_auth=password" >> "$GITHUB_OUTPUT"
+            else
+              echo "SSH key auth failed and DEPLOY_PASSWORD is empty."
+              exit 1
+            fi
+          else
+            if [[ -z "${DEPLOY_PASSWORD}" ]]; then
+              echo "Neither working SSH key nor DEPLOY_PASSWORD provided."
+              exit 1
+            fi
+            echo "resolved_auth=password" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Prepare Ansible inventory
         run: |
           set -euo pipefail
@@ -196,7 +222,7 @@ jobs:
       - name: Prepare Ansible vars
         env:
           DEPLOY_PASSWORD: ${{ secrets.DEPLOY_PASSWORD }}
-          USE_KEY: ${{ steps.key.outputs.use_key }}
+          RESOLVED_AUTH: ${{ steps.auth.outputs.resolved_auth }}
           KEY_FILE: ${{ steps.key.outputs.key_file }}
           BACKEND_IMAGE: ${{ needs.docker-publish.outputs.backend_image }}
           FRONTEND_IMAGE: ${{ needs.docker-publish.outputs.frontend_image }}
@@ -223,7 +249,7 @@ jobs:
               "registry_password": os.environ["REGISTRY_PASSWORD"],
           }
 
-          if os.environ.get("USE_KEY") == "true":
+          if os.environ.get("RESOLVED_AUTH") == "key":
               vars_dict["ansible_ssh_private_key_file"] = os.environ["KEY_FILE"]
           else:
               password = os.environ["DEPLOY_PASSWORD"]
