@@ -35,11 +35,11 @@ import {
   IconRefresh,
   IconTrash,
 } from "@tabler/icons-react";
-import { useEffect, useMemo, useState } from "react";
 import type { ReactNode } from "react";
-import { createTask, deleteTask, listTasks, updateTask } from "../features/tasks/api";
-import { getInsights } from "../features/insights/api";
+import { useEffect, useMemo, useState } from "react";
 import { Insights, RiskLevel, Task, TaskFilters, TaskPriority, TaskStatus } from "../entities/task/types";
+import { getInsights } from "../features/insights/api";
+import { createTask, deleteTask, listTasks, updateTask } from "../features/tasks/api";
 
 const statusOptions: Array<{ value: TaskStatus; label: string; description: string }> = [
   { value: "todo", label: "К выполнению", description: "Задачи в очереди" },
@@ -413,7 +413,7 @@ export default function App() {
                 <Card className="glass-card" padding="lg" radius="xl">
                   <Group justify="space-between" align="center">
                     <Box>
-                      <Text className="section-label">Пульс поставки</Text>
+                      <Text className="section-label">Статистика</Text>
                       <Title order={3}>{completionRate}% фокуса</Title>
                       <Text size="sm" c="dimmed">
                         Доля выполненных задач от общего объёма.
@@ -571,7 +571,7 @@ export default function App() {
                   <Group justify="space-between">
                     <Box>
                       <Text className="section-label">Фильтры</Text>
-                      <Title order={3}>Очередь разбора</Title>
+                      <Title order={3}>Параметры задач</Title>
                     </Box>
                     <IconFilter size={24} />
                   </Group>
