@@ -1,4 +1,4 @@
-name: CI
+name: CI/CD
 
 on:
   push:
@@ -12,6 +12,8 @@ permissions:
 env:
   GO_VERSION: "1.25.x"
   NODE_VERSION: "20"
+  DEPLOY_HOST: "178.253.43.153"
+  DEPLOY_USER: "root"
 
 jobs:
   backend-build:
@@ -81,3 +83,175 @@ jobs:
         with:
           name: frontend-coverage
           path: frontend/coverage
+
+  docker-publish:
+    runs-on: ubuntu-latest
+    if: github.event_name != 'pull_request'
+    needs: [backend-build, backend-test, frontend-build, frontend-test]
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      backend_image: ${{ steps.meta.outputs.backend_image }}
+      frontend_image: ${{ steps.meta.outputs.frontend_image }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Compute image names
+        id: meta
+        run: |
+          set -euo pipefail
+          repo_lc="$(echo "${GITHUB_REPOSITORY}" | tr '[:upper:]' '[:lower:]')"
+          {
+            echo "repo_lc=${repo_lc}"
+            echo "backend_image=ghcr.io/${repo_lc}/backend:${GITHUB_SHA}"
+            echo "frontend_image=ghcr.io/${repo_lc}/frontend:${GITHUB_SHA}"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Login to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push backend image
+        uses: docker/build-push-action@v6
+        with:
+          context: ./backend
+          push: true
+          tags: |
+            ${{ steps.meta.outputs.backend_image }}
+            ghcr.io/${{ steps.meta.outputs.repo_lc }}/backend:latest
+
+      - name: Build and push frontend image
+        uses: docker/build-push-action@v6
+        with:
+          context: ./frontend
+          push: true
+          tags: |
+            ${{ steps.meta.outputs.frontend_image }}
+            ghcr.io/${{ steps.meta.outputs.repo_lc }}/frontend:latest
+
+  deploy-production:
+    runs-on: ubuntu-latest
+    if: github.event_name != 'pull_request'
+    needs: docker-publish
+    environment: production
+    permissions:
+      contents: read
+      packages: read
+    concurrency:
+      group: production-deploy
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate deploy secrets
+        env:
+          DEPLOY_PASSWORD: ${{ secrets.DEPLOY_PASSWORD }}
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+        run: |
+          set -euo pipefail
+          if [[ -z "${DEPLOY_PASSWORD}" && -z "${DEPLOY_SSH_KEY}" ]]; then
+            echo "Either DEPLOY_PASSWORD or DEPLOY_SSH_KEY must be configured in GitHub Secrets."
+            exit 1
+          fi
+
+      - name: Install deployment dependencies
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y ansible sshpass
+
+      - name: Prepare optional SSH key
+        id: key
+        env:
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+        run: |
+          set -euo pipefail
+          if [[ -n "${DEPLOY_SSH_KEY}" ]]; then
+            mkdir -p "${HOME}/.ssh"
+            chmod 700 "${HOME}/.ssh"
+            key="${DEPLOY_SSH_KEY}"
+            # Tolerate accidental wrapping quotes and Windows CRLF in GitHub Secret value.
+            key="${key%\"}"
+            key="${key#\"}"
+            key="${key//$'\r'/}"
+            printf '%s\n' "${key}" > "${HOME}/.ssh/deploy_key"
+            chmod 600 "${HOME}/.ssh/deploy_key"
+            ssh-keygen -y -f "${HOME}/.ssh/deploy_key" >/dev/null
+            echo "use_key=true" >> "$GITHUB_OUTPUT"
+            echo "key_file=${HOME}/.ssh/deploy_key" >> "$GITHUB_OUTPUT"
+          else
+            echo "use_key=false" >> "$GITHUB_OUTPUT"
+            echo "key_file=" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Prepare Ansible inventory
+        run: |
+          set -euo pipefail
+          printf '[app]\n%s ansible_user=%s\n' "${DEPLOY_HOST}" "${DEPLOY_USER}" > infra/ansible/inventory.ci.ini
+
+      - name: Prepare Ansible vars
+        env:
+          DEPLOY_PASSWORD: ${{ secrets.DEPLOY_PASSWORD }}
+          USE_KEY: ${{ steps.key.outputs.use_key }}
+          KEY_FILE: ${{ steps.key.outputs.key_file }}
+          BACKEND_IMAGE: ${{ needs.docker-publish.outputs.backend_image }}
+          FRONTEND_IMAGE: ${{ needs.docker-publish.outputs.frontend_image }}
+          DEPLOY_USER: ${{ env.DEPLOY_USER }}
+          REGISTRY_USERNAME: ${{ github.actor }}
+          REGISTRY_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json
+          import os
+
+          vars_dict = {
+              "ansible_user": os.environ["DEPLOY_USER"],
+              "deploy_dir": "/opt/flowboard",
+              "compose_file_name": "docker-compose.prod.yml",
+              "backend_image": os.environ["BACKEND_IMAGE"],
+              "frontend_image": os.environ["FRONTEND_IMAGE"],
+              "db_user": "flowboard",
+              "db_password": "flowboard",
+              "db_name": "flowboard",
+              "registry_url": "ghcr.io",
+              "registry_username": os.environ["REGISTRY_USERNAME"],
+              "registry_password": os.environ["REGISTRY_PASSWORD"],
+          }
+
+          if os.environ.get("USE_KEY") == "true":
+              vars_dict["ansible_ssh_private_key_file"] = os.environ["KEY_FILE"]
+          else:
+              password = os.environ["DEPLOY_PASSWORD"]
+              vars_dict["ansible_password"] = password
+              vars_dict["ansible_ssh_pass"] = password
+
+          with open("/tmp/ansible-vars.json", "w", encoding="utf-8") as f:
+              json.dump(vars_dict, f)
+          PY
+
+      - name: Install Docker on server
+        env:
+          ANSIBLE_HOST_KEY_CHECKING: "False"
+          ANSIBLE_CONFIG: infra/ansible/ansible.cfg
+        run: |
+          set -euo pipefail
+          ansible-playbook -i infra/ansible/inventory.ci.ini infra/ansible/playbooks/install_docker.yml -e "@/tmp/ansible-vars.json"
+
+      - name: Deploy application stack
+        env:
+          ANSIBLE_HOST_KEY_CHECKING: "False"
+          ANSIBLE_CONFIG: infra/ansible/ansible.cfg
+        run: |
+          set -euo pipefail
+          ansible-playbook -i infra/ansible/inventory.ci.ini infra/ansible/playbooks/deploy_flowboard.yml -e "@/tmp/ansible-vars.json"
+
+      - name: Smoke test deployed app
+        run: |
+          set -euo pipefail
+          curl -fsS -m 20 "http://${DEPLOY_HOST}/api/insights" >/dev/null
+          curl -fsS -m 20 "http://${DEPLOY_HOST}:8080/api/tasks" >/dev/null
