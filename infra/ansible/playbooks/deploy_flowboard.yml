@@ -1,11 +1,28 @@
 ---
 - name: Deploy FlowBoard with Docker Compose
   hosts: app
-  become: true
-  gather_facts: true
+  become: "{{ (ansible_user | default('root')) != 'root' }}"
+  gather_facts: false
 
   vars:
     local_compose_path: "{{ playbook_dir }}/../../../deploy/docker-compose.prod.yml"
+
+  pre_tasks:
+    - name: Bootstrap Python 3 when missing
+      ansible.builtin.raw: |
+        set -eu
+        if command -v python3 >/dev/null 2>&1; then
+          echo "python-present"
+        else
+          apt-get update -y
+          DEBIAN_FRONTEND=noninteractive apt-get install -y python3
+          echo "python-installed"
+        fi
+      register: python_bootstrap
+      changed_when: "'python-installed' in python_bootstrap.stdout"
+
+    - name: Gather facts
+      ansible.builtin.setup:
 
   tasks:
     - name: Ensure deploy directory exists
@@ -28,7 +45,7 @@
 
     - name: Login to Docker registry when credentials are provided
       ansible.builtin.shell: |
-        set -euo pipefail
+        set -eu
         echo "{{ registry_password }}" | docker login "{{ registry_url }}" --username "{{ registry_username }}" --password-stdin
       when:
         - registry_url | length > 0

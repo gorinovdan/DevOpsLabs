@@ -1,8 +1,25 @@
 ---
 - name: Install Docker on target VM
   hosts: app
-  become: true
-  gather_facts: true
+  become: "{{ (ansible_user | default('root')) != 'root' }}"
+  gather_facts: false
+
+  pre_tasks:
+    - name: Bootstrap Python 3 when missing
+      ansible.builtin.raw: |
+        set -eu
+        if command -v python3 >/dev/null 2>&1; then
+          echo "python-present"
+        else
+          apt-get update -y
+          DEBIAN_FRONTEND=noninteractive apt-get install -y python3
+          echo "python-installed"
+        fi
+      register: python_bootstrap
+      changed_when: "'python-installed' in python_bootstrap.stdout"
+
+    - name: Gather facts
+      ansible.builtin.setup:
 
   tasks:
     - name: Update apt cache
@@ -10,15 +27,26 @@
         update_cache: true
         cache_valid_time: 3600
 
-    - name: Install Docker engine and compose plugin
+    - name: Install Docker engine packages
       ansible.builtin.apt:
         name:
           - ca-certificates
           - curl
           - gnupg
           - docker.io
-          - docker-compose-v2
         state: present
+
+    - name: Install Docker Compose plugin package
+      block:
+        - name: Install docker-compose-plugin package
+          ansible.builtin.apt:
+            name: docker-compose-plugin
+            state: present
+      rescue:
+        - name: Install docker-compose-v2 package as fallback
+          ansible.builtin.apt:
+            name: docker-compose-v2
+            state: present
 
     - name: Ensure docker service is enabled and running
       ansible.builtin.systemd:
