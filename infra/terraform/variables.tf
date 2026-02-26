@@ -32,7 +32,7 @@ variable "os_name" {
 variable "os_version" {
   description = "OS version filter for VM"
   type        = string
-  default     = "22.04"
+  default     = "24.04"
 }
 
 variable "cpu" {

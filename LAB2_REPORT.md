@@ -1,4 +1,4 @@
-# Лабораторная работа №2  
+# Лабораторная работа №2
 
 ## 1. Цель работы
 Изучить и применить на практике:
@@ -78,6 +78,7 @@ Terraform outputs (фактические):
 Для теста использован cloud registry `ttl.sh`:
 - `ttl.sh/flowboard-idempotent-lab-20260226-backend:24h`
 - `ttl.sh/flowboard-idempotent-lab-20260226-frontend:24h`
+В GitHub Actions используется GHCR
 
 ## 3. Итог
 Все задачи лабораторной выполнены:

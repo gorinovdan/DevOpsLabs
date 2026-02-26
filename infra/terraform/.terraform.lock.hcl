@@ -1,10 +1,11 @@
-# This file is maintained automatically by "terraform init".
+# This file is maintained automatically by "tofu init".
 # Manual edits may be lost in future updates.
 
 provider "tf.timeweb.cloud/timeweb-cloud/timeweb-cloud" {
   version = "1.6.11"
   hashes = [
     "h1:bstPkpjZb6o4pjhfF0Nt43noajsYMN3Bc5HIYKyxK24=",
+    "h1:e4Tj1rVlJ8ufeS393J842bKeker/WxuloSZA3PM7Q6Q=",
     "zh:35663192f04cf6fce4dd600f4b90639eec9b8a07c13c42c0ece2476421fa7712",
     "zh:39071e1097d70e106711087d28d70c59270f8eedeb7379111c2baca65b95f6dc",
     "zh:82e427fca10a1230862114544909e34b371fddcea449a9aa896e8ba0bb5999e8",

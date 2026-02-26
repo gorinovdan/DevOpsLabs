@@ -25,7 +25,7 @@ SERVER_COMMENT="${SERVER_COMMENT:-Created by deploy_idempotent.sh}"
 LOCATION="${LOCATION:-ru-1}"
 OS_NAME="${OS_NAME:-ubuntu}"
 OS_VERSION="${OS_VERSION:-22.04}"
-CPU="${CPU:-1}"
+CPU="${CPU:-2}"
 RAM_MB="${RAM_MB:-1024}"
 DISK_MB="${DISK_MB:-15360}"
 PROJECT_ID="${PROJECT_ID:-}"
@@ -35,10 +35,17 @@ STATUS_WAIT_ATTEMPTS="${STATUS_WAIT_ATTEMPTS:-60}"
 STATUS_WAIT_DELAY_SEC="${STATUS_WAIT_DELAY_SEC:-10}"
 SSH_WAIT_ATTEMPTS="${SSH_WAIT_ATTEMPTS:-60}"
 SSH_WAIT_DELAY_SEC="${SSH_WAIT_DELAY_SEC:-5}"
+TF_RETRY_ATTEMPTS="${TF_RETRY_ATTEMPTS:-5}"
+TF_RETRY_DELAY_SEC="${TF_RETRY_DELAY_SEC:-5}"
 
 if [[ -z "${TWC_TOKEN:-}" ]]; then
   echo "Error: TWC_TOKEN is required."
   echo "Example: TWC_TOKEN='<token>' ${0}"
+  exit 1
+fi
+
+if [[ "${TWC_TOKEN}" =~ ^\<.*\>$ ]]; then
+  echo "Error: TWC_TOKEN looks like a placeholder (${TWC_TOKEN}). Set a real Timeweb API token."
   exit 1
 fi
 
@@ -128,12 +135,72 @@ tf() {
   TWC_TOKEN="${TWC_TOKEN}" terraform -chdir="${TF_DIR}" "$@"
 }
 
+tf_state_rm_if_present() {
+  local resource="$1"
+  if tf state show "${resource}" >/dev/null 2>&1; then
+    tf state rm "${resource}" >/dev/null
+    log "Removed stale Terraform state resource: ${resource}"
+  fi
+}
+
+repair_stale_state_if_needed() {
+  local output_file="$1"
+
+  if grep -q "error_code: server_not_found" "${output_file}" && grep -q "with twc_server.vm" "${output_file}"; then
+    log "Detected stale state for twc_server.vm (resource is missing in cloud). Repairing local state and retrying."
+    tf_state_rm_if_present "twc_server_ip.public_ipv4"
+    tf_state_rm_if_present "twc_server.vm"
+    return 0
+  fi
+
+  return 1
+}
+
+tf_with_retry() {
+  local attempt=1
+  local exit_code=0
+  local output_file=""
+  local repaired_stale_state=0
+
+  while (( attempt <= TF_RETRY_ATTEMPTS )); do
+    output_file="$(mktemp)"
+    if tf "$@" 2>&1 | tee "${output_file}"; then
+      exit_code=0
+      rm -f "${output_file}"
+      return 0
+    else
+      exit_code=${PIPESTATUS[0]}
+    fi
+
+    if (( repaired_stale_state == 0 )) && repair_stale_state_if_needed "${output_file}"; then
+      repaired_stale_state=1
+      rm -f "${output_file}"
+      log "Retrying terraform command after local state repair: terraform $*"
+      continue
+    fi
+
+    rm -f "${output_file}"
+    if (( attempt == TF_RETRY_ATTEMPTS )); then
+      echo "Error: terraform command failed after ${attempt} attempts: terraform $*"
+      return "${exit_code}"
+    fi
+
+    log "Terraform command failed (attempt ${attempt}/${TF_RETRY_ATTEMPTS}), retrying in ${TF_RETRY_DELAY_SEC}s: terraform $*"
+    sleep "${TF_RETRY_DELAY_SEC}"
+    attempt=$((attempt + 1))
+  done
+}
+
 wait_for_vm_ready() {
   local status ip attempt
   status=""
   ip=""
   for attempt in $(seq 1 "${STATUS_WAIT_ATTEMPTS}"); do
-    tf apply -refresh-only -auto-approve -input=false >/dev/null
+    if ! tf_with_retry apply -refresh-only -auto-approve -input=false >/dev/null; then
+      log "Failed to refresh VM state; continuing readiness checks."
+      sleep "${STATUS_WAIT_DELAY_SEC}"
+      continue
+    fi
     status="$(tf output -raw server_status 2>/dev/null || true)"
     ip="$(tf output -raw server_main_ipv4 2>/dev/null || true)"
 
@@ -264,9 +331,9 @@ main() {
   ensure_tfvars
 
   log "Running Terraform (init/validate/apply)..."
-  tf init -input=false
-  tf validate
-  tf apply -input=false -auto-approve
+  tf_with_retry init -input=false
+  tf_with_retry validate
+  tf_with_retry apply -input=false -auto-approve
 
   log "Waiting for VM status=on and IPv4..."
   VM_IP="$(wait_for_vm_ready)"
@@ -276,9 +343,13 @@ main() {
   wait_for_ssh "${VM_IP}"
 
   log "Building and pushing images..."
-  mapfile -t images < <(build_and_push_images)
-  BACKEND_IMAGE="${images[0]}"
-  FRONTEND_IMAGE="${images[1]}"
+  images_output="$(build_and_push_images)"
+  BACKEND_IMAGE="$(printf '%s\n' "${images_output}" | sed -n '1p')"
+  FRONTEND_IMAGE="$(printf '%s\n' "${images_output}" | sed -n '2p')"
+  if [[ -z "${BACKEND_IMAGE}" || -z "${FRONTEND_IMAGE}" ]]; then
+    echo "Error: failed to parse built image names."
+    exit 1
+  fi
 
   log "Running Ansible Docker installation playbook..."
   run_ansible_install_docker "${VM_IP}"
