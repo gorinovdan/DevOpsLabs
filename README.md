@@ -12,26 +12,6 @@ FlowBoard - учебное full-stack приложение для управле
 - Тесты: Go `testing` + `testify`, Vitest + Testing Library
 - CI: GitHub Actions (4 job-а: build/test для backend и frontend)
 
-## Принципы DevOps и влияние
-- Совместная ответственность: разработка и эксплуатация работают как единая команда.
-- Автоматизация: сборка, тестирование, проверка качества и релизы выполняются предсказуемо.
-- Непрерывность: изменения быстро попадают в основной поток через CI.
-- Наблюдаемость: метрики и логи дают понимание качества и стабильности.
-- Культура улучшений: короткие циклы обратной связи ускоряют развитие продукта.
-
-## Git (установка и настройка)
-1. Установить Git: https://git-scm.com/downloads
-2. Настроить пользователя:
-```bash
-git config --global user.name "Your Name"
-git config --global user.email "you@example.com"
-```
-3. Проверить состояние:
-```bash
-git --version
-git config --list
-```
-
 ## Запуск локально
 ### Требования
 - Git
@@ -88,6 +68,105 @@ docker compose down
 ```
 Данные PostgreSQL сохраняются в Docker volume `postgres-data`.
 
+## IaC и деплой в облако
+В репозиторий добавлена инфраструктура для лабораторной:
+- `infra/terraform` - создание VM в Timeweb Cloud через Terraform;
+- `infra/ansible` - установка Docker и деплой приложения;
+- `deploy/docker-compose.prod.yml` - production compose (backend + frontend + postgres).
+
+### 1. Terraform: создание VM в Timeweb Cloud
+```bash
+cd infra/terraform
+cp terraform.tfvars.example terraform.tfvars
+```
+
+Укажите API-токен Timeweb Cloud:
+```bash
+export TWC_TOKEN="<TIMEWEB_API_TOKEN>"
+```
+
+Применение:
+```bash
+terraform init
+terraform validate
+terraform plan
+terraform apply
+```
+
+После `apply` Terraform выведет IP и SSH-команду для подключения к VM.
+
+### 2. Ansible: установка Docker на VM
+```bash
+cd infra/ansible
+cp inventory.ini.example inventory.ini
+cp group_vars/all.yml.example group_vars/all.yml
+```
+
+Отредактируйте `inventory.ini` (IP VM) и запустите:
+```bash
+ansible-playbook playbooks/install_docker.yml
+```
+
+### 3. Сборка и публикация образов в облачный реестр
+Скрипт:
+```bash
+./scripts/build_and_push.sh <image_prefix> [tag]
+```
+
+Пример для облачного реестра `ttl.sh`:
+```bash
+./scripts/build_and_push.sh ttl.sh/flowboard-$(date +%Y%m%d%H%M%S) 24h
+```
+
+Запишите получившиеся `backend_image` и `frontend_image` в `infra/ansible/group_vars/all.yml`.
+
+### 4. Деплой приложения на VM
+```bash
+cd infra/ansible
+ansible-playbook playbooks/deploy_flowboard.yml
+```
+
+После запуска:
+- Frontend: `http://<VM_IP>/`
+- Backend API: `http://<VM_IP>:8080`
+
+### Единый идемпотентный сценарий деплоя
+Добавлен orchestration-скрипт:
+```bash
+./scripts/deploy_idempotent.sh
+```
+
+Что делает скрипт:
+1. Проверяет/до устанавливает инструменты (`ansible`, `docker`, `docker compose`), проверяет `terraform`.
+2. Готовит SSH-ключ и `infra/terraform/terraform.auto.tfvars` (если файла нет).
+3. Выполняет `terraform init/validate/apply` для VM в Timeweb Cloud.
+4. Ждёт готовность VM и SSH.
+5. Собирает и пушит Docker-образы (или пропускает сборку, если образы уже есть в registry).
+6. Запускает Ansible playbook для Docker.
+7. Если контейнеры уже запущены на целевых образах - пропускает повторный deploy (идемпотентность).
+8. Выполняет smoke-тест API.
+
+Обязательная переменная:
+```bash
+export TWC_TOKEN="<TIMEWEB_API_TOKEN>"
+```
+
+Полезные опции через env:
+- `REGISTRY_PREFIX` (по умолчанию `ttl.sh/flowboard-lab-amd64`)
+- `IMAGE_TAG` (по умолчанию `24h`)
+- `BUILD_PLATFORM` (например `linux/amd64`)
+- `FORCE_REBUILD=1` (принудительная пересборка образов)
+
+Пример:
+```bash
+TWC_TOKEN="<token>" \
+REGISTRY_PREFIX="ttl.sh/flowboard-idempotent-lab-20260226" \
+IMAGE_TAG="24h" \
+./scripts/deploy_idempotent.sh
+```
+
+Подробный отчёт по лабораторной: `LAB2_REPORT.md`.
+
 ## REST API
 Базовый URL: `http://localhost:8080`
 
@@ -122,7 +201,10 @@ docker compose down
 ```
 
 ## CI
-Workflow находится в `/.github/workflows/ci.yml`. Включает 4 независимых job-а:
+Workflow находится в `/.github/workflows/ci.yml`.
+
+### CI stage
+Включает 4 независимых job-а:
 - `backend-build`
 - `backend-test`
 - `frontend-build`
@@ -133,5 +215,27 @@ Workflow находится в `/.github/workflows/ci.yml`. Включает 4 �
 - frontend test job запускает `vitest` с coverage и порогами `100%`
 - покрытия backend/frontend сохраняются как артефакты GitHub Actions
 
-## Репозиторий и Git
-Проект готов к публикации в GitHub/GitLab. В корне есть `.gitignore` для Go и Node.js, а все команды запуска и тестов воспроизводимы локально и в CI.
+### CD stage
+После успешного CI на `push` в `main/master` выполняются:
+- `docker-publish` - сборка и публикация backend/frontend образов в GHCR:
+  - `ghcr.io/<owner>/<repo>/backend:<git_sha>`
+  - `ghcr.io/<owner>/<repo>/frontend:<git_sha>`
+- `deploy-production` - деплой на прод-сервер `178.253.43.153` через Ansible:
+  - установка Docker (идемпотентно),
+  - обновление compose-стека,
+  - smoke-тест API.
+
+Для CD необходимо задать GitHub Secrets в репозитории:
+- `DEPLOY_PASSWORD` - пароль пользователя `root` на `178.253.43.153`
+- `DEPLOY_SSH_KEY` - опционально, приватный SSH-ключ для деплоя (если задан, приоритетнее пароля)
+
+Рекомендуется:
+1. Добавить SSH-ключ и перейти на key-based auth.
+2. Ограничить доступ к job `deploy-production` через GitHub Environment protection rules.
+
+Пример подготовки deploy-ключа:
+```bash
+ssh-keygen -t ed25519 -f ~/.ssh/devopslabs_ci_deploy -N ""
+ssh-copy-id -i ~/.ssh/devopslabs_ci_deploy.pub root@178.253.43.153
+```
+Содержимое `~/.ssh/devopslabs_ci_deploy` добавьте в GitHub Secret `DEPLOY_SSH_KEY`.
