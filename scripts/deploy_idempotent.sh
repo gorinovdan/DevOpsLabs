@@ -50,7 +50,8 @@ if [[ "${TWC_TOKEN}" =~ ^\<.*\>$ ]]; then
 fi
 
 log() {
-  printf '[%s] %s\n' "$(date +'%Y-%m-%d %H:%M:%S')" "$*"
+  # Keep logs on stderr so command substitution captures only function outputs.
+  printf '[%s] %s\n' "$(date +'%Y-%m-%d %H:%M:%S')" "$*" >&2
 }
 
 require_cmd() {
