@@ -28,7 +28,6 @@ frontend/coverage/
 .terraform/
 *.tfstate
 *.tfstate.*
-infra/terraform/terraform.auto.tfvars
 
 # Infra local secrets
 infra/ansible/inventory.ini

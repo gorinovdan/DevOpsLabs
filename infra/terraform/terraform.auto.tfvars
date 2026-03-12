@@ -1,0 +1,11 @@
+server_name = "flowboard-lab-vm"
+server_comment = "Created by deploy_idempotent.sh"
+location = "ru-1"
+os_name = "ubuntu"
+os_version = "24.04"
+cpu = 2
+ram_mb = 1024
+disk_mb = 15360
+project_id = ""
+ssh_key_name = "flowboard-lab-key"
+ssh_public_key_path = "/Users/lasat/.ssh/id_ed25519.pub"
