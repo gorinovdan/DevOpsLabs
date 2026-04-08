@@ -1,2 +1,2 @@
 [app]
-100.65.144.112 ansible_user=root
+127.0.0.1 ansible_user=ubuntu

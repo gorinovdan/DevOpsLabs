@@ -1,11 +1,12 @@
 ---
-- name: Deploy FlowBoard with Docker Compose
+- name: Deploy FlowBoard to Minikube
   hosts: app
   become: "{{ (ansible_user | default('root')) != 'root' }}"
   gather_facts: false
 
   vars:
-    local_compose_path: "{{ playbook_dir }}/../../../deploy/docker-compose.prod.yml"
+    local_k8s_dir: "{{ playbook_dir }}/../../../deploy/k8s"
+    remote_k8s_dir: "{{ deploy_dir }}/k8s"
 
   pre_tasks:
     - name: Bootstrap Python 3 when missing
@@ -31,17 +32,11 @@
         state: directory
         mode: "0755"
 
-    - name: Upload production docker-compose file
+    - name: Upload Kubernetes manifests
       ansible.builtin.copy:
-        src: "{{ local_compose_path }}"
-        dest: "{{ deploy_dir }}/{{ compose_file_name }}"
+        src: "{{ local_k8s_dir }}/"
+        dest: "{{ remote_k8s_dir }}/"
         mode: "0644"
-
-    - name: Render compose env file
-      ansible.builtin.template:
-        src: "{{ playbook_dir }}/../templates/compose.env.j2"
-        dest: "{{ deploy_dir }}/compose.env"
-        mode: "0600"
 
     - name: Login to Docker registry when credentials are provided
       ansible.builtin.shell: |
@@ -53,23 +48,49 @@
         - registry_password | length > 0
       no_log: true
 
-    - name: Pull latest images
-      ansible.builtin.command: docker compose --env-file compose.env -f {{ compose_file_name }} pull
-      args:
-        chdir: "{{ deploy_dir }}"
+    - name: Apply namespace and core services
+      ansible.builtin.command: "kubectl apply -f {{ item }}"
+      loop:
+        - "{{ remote_k8s_dir }}/namespace.yaml"
+        - "{{ remote_k8s_dir }}/postgres.yaml"
+        - "{{ remote_k8s_dir }}/backend.yaml"
+        - "{{ remote_k8s_dir }}/frontend.yaml"
+        - "{{ remote_k8s_dir }}/backend-hpa.yaml"
+        - "{{ remote_k8s_dir }}/frontend-hpa.yaml"
 
-    - name: Start application stack
-      ansible.builtin.command: docker compose --env-file compose.env -f {{ compose_file_name }} up -d
-      args:
-        chdir: "{{ deploy_dir }}"
+    - name: Set backend image
+      ansible.builtin.command: "kubectl -n flowboard set image deployment/backend backend={{ backend_image }}"
 
-    - name: Show stack status
-      ansible.builtin.command: docker compose --env-file compose.env -f {{ compose_file_name }} ps
-      args:
-        chdir: "{{ deploy_dir }}"
+    - name: Set frontend image
+      ansible.builtin.command: "kubectl -n flowboard set image deployment/frontend frontend={{ frontend_image }}"
+
+    - name: Wait for postgres rollout
+      ansible.builtin.command: kubectl -n flowboard rollout status deployment/postgres --timeout=300s
       changed_when: false
-      register: compose_ps
 
-    - name: Print stack status
+    - name: Wait for backend rollout
+      ansible.builtin.command: kubectl -n flowboard rollout status deployment/backend --timeout=300s
+      changed_when: false
+
+    - name: Wait for frontend rollout
+      ansible.builtin.command: kubectl -n flowboard rollout status deployment/frontend --timeout=300s
+      changed_when: false
+
+    - name: Show Kubernetes resources
+      ansible.builtin.command: kubectl -n flowboard get pods,svc,hpa
+      changed_when: false
+      register: k8s_status
+
+    - name: Print Kubernetes resources
       ansible.builtin.debug:
-        var: compose_ps.stdout_lines
+        var: k8s_status.stdout_lines
+
+    - name: Smoke test through frontend service URL on VM
+      ansible.builtin.shell: |
+        set -euo pipefail
+        frontend_url="$(minikube service frontend -n flowboard --url | head -n 1)"
+        curl -fsS -m 20 "${frontend_url}/api/insights" >/dev/null
+        curl -fsS -m 20 "${frontend_url}/api/tasks" >/dev/null
+      args:
+        executable: /bin/bash
+      changed_when: false

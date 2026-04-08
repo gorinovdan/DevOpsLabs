@@ -29,6 +29,13 @@ frontend/coverage/
 *.tfstate
 *.tfstate.*
 infra/terraform/terraform.auto.tfvars
+infra/terraform/terraform.tfvars
+infra/terraform/cloud-init.generated.yaml
+infra/terraform/vm-info.generated.json
+infra/terraform/*.legacy.bak
+infra/terraform/*.legacy.*.bak
+infra/terraform/terraform.auto.tfvars.disabled.*.bak
+infra/terraform/.terraform.lock.hcl.opentofu.*.bak
 
 # Infra local secrets
 infra/ansible/inventory.ini

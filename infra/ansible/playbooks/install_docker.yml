@@ -1,8 +1,11 @@
 ---
-- name: Install Docker on target VM
+- name: Install Docker and Minikube on target VM
   hosts: app
   become: "{{ (ansible_user | default('root')) != 'root' }}"
   gather_facts: false
+  vars:
+    minikube_max_memory_mb: 2048
+    minikube_memory_reserve_mb: 256
 
   pre_tasks:
     - name: Bootstrap Python 3 when missing
@@ -21,32 +24,32 @@
     - name: Gather facts
       ansible.builtin.setup:
 
+    - name: Compute minikube resource limits from VM capacity
+      ansible.builtin.set_fact:
+        host_mem_mb: "{{ ansible_facts.memtotal_mb | default(2048) | int }}"
+        host_vcpus: "{{ ansible_facts.processor_vcpus | default(2) | int }}"
+
+    - name: Compute minikube memory and cpu
+      ansible.builtin.set_fact:
+        minikube_memory_mb: "{{ [[((host_mem_mb | int) - (minikube_memory_reserve_mb | int)), (minikube_max_memory_mb | int)] | min, 512] | max }}"
+        minikube_cpus: "{{ [[(host_vcpus | int), 2] | min, 1] | max }}"
+
   tasks:
     - name: Update apt cache
       ansible.builtin.apt:
         update_cache: true
         cache_valid_time: 3600
 
-    - name: Install Docker engine packages
+    - name: Install base packages
       ansible.builtin.apt:
         name:
           - ca-certificates
           - curl
           - gnupg
+          - conntrack
+          - socat
           - docker.io
         state: present
-
-    - name: Install Docker Compose plugin package
-      block:
-        - name: Install docker-compose-plugin package
-          ansible.builtin.apt:
-            name: docker-compose-plugin
-            state: present
-      rescue:
-        - name: Install docker-compose-v2 package as fallback
-          ansible.builtin.apt:
-            name: docker-compose-v2
-            state: present
 
     - name: Ensure docker service is enabled and running
       ansible.builtin.systemd:
@@ -54,11 +57,90 @@
         enabled: true
         state: started
 
+    - name: Ensure ansible user is in docker group
+      ansible.builtin.user:
+        name: "{{ ansible_user | default('ubuntu') }}"
+        groups: docker
+        append: true
+
+    - name: Install kubectl binary
+      ansible.builtin.get_url:
+        url: https://dl.k8s.io/release/v1.30.6/bin/linux/amd64/kubectl
+        dest: /usr/local/bin/kubectl
+        mode: "0755"
+
+    - name: Install minikube binary
+      ansible.builtin.get_url:
+        url: https://storage.googleapis.com/minikube/releases/v1.38.1/minikube-linux-amd64
+        dest: /usr/local/bin/minikube
+        mode: "0755"
+
+    - name: Start minikube with docker driver
+      ansible.builtin.shell: |
+        set -eu
+        if ! minikube status >/dev/null 2>&1; then
+          if command -v sg >/dev/null 2>&1; then
+            sg docker -c "minikube start --driver=docker --force --cpus={{ minikube_cpus }} --memory={{ minikube_memory_mb }}"
+          else
+            minikube start --driver=docker --force --cpus={{ minikube_cpus }} --memory={{ minikube_memory_mb }}
+          fi
+        fi
+      args:
+        executable: /bin/bash
+      become: false
+      environment:
+        HOME: "/home/{{ ansible_user | default('ubuntu') }}"
+
+    - name: Show chosen minikube resources
+      ansible.builtin.debug:
+        msg:
+          - "host_mem_mb={{ host_mem_mb }}"
+          - "host_vcpus={{ host_vcpus }}"
+          - "minikube_memory_mb={{ minikube_memory_mb }}"
+          - "minikube_cpus={{ minikube_cpus }}"
+
+    - name: Enable metrics-server addon
+      ansible.builtin.shell: |
+        set -eu
+        if command -v sg >/dev/null 2>&1; then
+          sg docker -c "minikube addons enable metrics-server"
+        else
+          minikube addons enable metrics-server
+        fi
+      args:
+        executable: /bin/bash
+      changed_when: false
+      become: false
+      environment:
+        HOME: "/home/{{ ansible_user | default('ubuntu') }}"
+
+    - name: Wait for minikube node to become Ready
+      ansible.builtin.shell: |
+        set -eu
+        if command -v sg >/dev/null 2>&1; then
+          sg docker -c "kubectl wait --for=condition=Ready node/minikube --timeout=300s"
+        else
+          kubectl wait --for=condition=Ready node/minikube --timeout=300s
+        fi
+      args:
+        executable: /bin/bash
+      changed_when: false
+      become: false
+      environment:
+        HOME: "/home/{{ ansible_user | default('ubuntu') }}"
+
     - name: Check Docker version
       ansible.builtin.command: docker --version
       register: docker_version
       changed_when: false
 
-    - name: Show Docker version
+    - name: Check Minikube version
+      ansible.builtin.command: minikube version
+      register: minikube_version
+      changed_when: false
+
+    - name: Show versions
       ansible.builtin.debug:
-        var: docker_version.stdout
+        msg:
+          - "{{ docker_version.stdout }}"
+          - "{{ minikube_version.stdout_lines[0] }}"

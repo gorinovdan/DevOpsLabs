@@ -22,8 +22,6 @@ concurrency:
 env:
   GO_VERSION: "1.25.x"
   NODE_VERSION: "20"
-  DEPLOY_HOST: "178.253.43.153"
-  DEPLOY_USER: "root"
 
 jobs:
   changes:
@@ -265,150 +263,72 @@ jobs:
           cache-from: type=gha,scope=frontend-image
           cache-to: type=gha,mode=max,scope=frontend-image
 
-  deploy-production:
-    runs-on: ubuntu-latest
+  deploy-minikube:
+    runs-on: [self-hosted, windows]
     if: github.event_name != 'pull_request' && (github.event_name == 'workflow_dispatch' || needs.changes.outputs.backend == 'true' || needs.changes.outputs.frontend == 'true' || needs.changes.outputs.infra == 'true' || needs.changes.outputs.ci == 'true')
     needs: [changes, docker-publish]
-    environment: production
     permissions:
       contents: read
       packages: read
     concurrency:
-      group: production-deploy
+      group: local-minikube-deploy
       cancel-in-progress: false
     steps:
       - uses: actions/checkout@v4
 
-      - name: Validate deploy secrets
-        env:
-          DEPLOY_PASSWORD: ${{ secrets.DEPLOY_PASSWORD }}
-          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+      - name: Ensure required tools on runner
+        shell: pwsh
         run: |
-          set -euo pipefail
-          if [[ -z "${DEPLOY_PASSWORD}" && -z "${DEPLOY_SSH_KEY}" ]]; then
-            echo "Either DEPLOY_PASSWORD or DEPLOY_SSH_KEY must be configured in GitHub Secrets."
-            exit 1
-          fi
-
-      - name: Install deployment dependencies
-        run: |
-          set -euo pipefail
-          sudo apt-get update
-          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y ansible sshpass
-
-      - name: Prepare optional SSH key
-        id: key
-        env:
-          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
-        run: |
-          set -euo pipefail
-          if [[ -n "${DEPLOY_SSH_KEY}" ]]; then
-            mkdir -p "${HOME}/.ssh"
-            chmod 700 "${HOME}/.ssh"
-            key="${DEPLOY_SSH_KEY}"
-            key="${key%\"}"
-            key="${key#\"}"
-            key="${key//$'\r'/}"
-            printf '%s\n' "${key}" > "${HOME}/.ssh/deploy_key"
-            chmod 600 "${HOME}/.ssh/deploy_key"
-            ssh-keygen -y -f "${HOME}/.ssh/deploy_key" >/dev/null
-            echo "use_key=true" >> "$GITHUB_OUTPUT"
-            echo "key_file=${HOME}/.ssh/deploy_key" >> "$GITHUB_OUTPUT"
-          else
-            echo "use_key=false" >> "$GITHUB_OUTPUT"
-            echo "key_file=" >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: Probe SSH auth method
-        id: auth
-        env:
-          DEPLOY_PASSWORD: ${{ secrets.DEPLOY_PASSWORD }}
-          USE_KEY: ${{ steps.key.outputs.use_key }}
-          KEY_FILE: ${{ steps.key.outputs.key_file }}
-        run: |
-          set -euo pipefail
-          if [[ "${USE_KEY}" == "true" ]]; then
-            if ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new -o ConnectTimeout=8 -i "${KEY_FILE}" "${DEPLOY_USER}@${DEPLOY_HOST}" "echo ok" >/dev/null 2>&1; then
-              echo "resolved_auth=key" >> "$GITHUB_OUTPUT"
-            elif [[ -n "${DEPLOY_PASSWORD}" ]]; then
-              echo "SSH key auth failed, falling back to password auth."
-              echo "resolved_auth=password" >> "$GITHUB_OUTPUT"
-            else
-              echo "SSH key auth failed and DEPLOY_PASSWORD is empty."
-              exit 1
-            fi
-          else
-            if [[ -z "${DEPLOY_PASSWORD}" ]]; then
-              echo "Neither working SSH key nor DEPLOY_PASSWORD provided."
-              exit 1
-            fi
-            echo "resolved_auth=password" >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: Prepare Ansible inventory
-        run: |
-          set -euo pipefail
-          printf '[app]\n%s ansible_user=%s\n' "${DEPLOY_HOST}" "${DEPLOY_USER}" > infra/ansible/inventory.ci.ini
-
-      - name: Prepare Ansible vars
-        env:
-          DEPLOY_PASSWORD: ${{ secrets.DEPLOY_PASSWORD }}
-          RESOLVED_AUTH: ${{ steps.auth.outputs.resolved_auth }}
-          KEY_FILE: ${{ steps.key.outputs.key_file }}
-          BACKEND_IMAGE: ${{ needs.docker-publish.outputs.backend_image }}
-          FRONTEND_IMAGE: ${{ needs.docker-publish.outputs.frontend_image }}
-          DEPLOY_USER: ${{ env.DEPLOY_USER }}
-          REGISTRY_USERNAME: ${{ github.actor }}
-          REGISTRY_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          set -euo pipefail
-          python3 - <<'PY'
-          import json
-          import os
-
-          vars_dict = {
-              "ansible_user": os.environ["DEPLOY_USER"],
-              "deploy_dir": "/opt/flowboard",
-              "compose_file_name": "docker-compose.prod.yml",
-              "backend_image": os.environ["BACKEND_IMAGE"],
-              "frontend_image": os.environ["FRONTEND_IMAGE"],
-              "db_user": "flowboard",
-              "db_password": "flowboard",
-              "db_name": "flowboard",
-              "registry_url": "ghcr.io",
-              "registry_username": os.environ["REGISTRY_USERNAME"],
-              "registry_password": os.environ["REGISTRY_PASSWORD"],
+          $ErrorActionPreference = 'Stop'
+          foreach ($cmd in @('docker', 'kubectl', 'minikube', 'helm')) {
+            if (-not (Get-Command $cmd -ErrorAction SilentlyContinue)) {
+              throw "Required command not found on self-hosted runner: $cmd"
+            }
           }
 
-          if os.environ.get("RESOLVED_AUTH") == "key":
-              vars_dict["ansible_ssh_private_key_file"] = os.environ["KEY_FILE"]
-          else:
-              password = os.environ["DEPLOY_PASSWORD"]
-              vars_dict["ansible_password"] = password
-              vars_dict["ansible_ssh_pass"] = password
-
-          with open("/tmp/ansible-vars.json", "w", encoding="utf-8") as f:
-              json.dump(vars_dict, f)
-          PY
-
-      - name: Install Docker on server
-        env:
-          ANSIBLE_HOST_KEY_CHECKING: "False"
-          ANSIBLE_CONFIG: infra/ansible/ansible.cfg
+      - name: Start minikube if needed
+        shell: pwsh
         run: |
-          set -euo pipefail
-          ansible-playbook -i infra/ansible/inventory.ci.ini infra/ansible/playbooks/install_docker.yml -e "@/tmp/ansible-vars.json"
+          $ErrorActionPreference = 'Stop'
+          minikube status *> $null
+          if ($LASTEXITCODE -ne 0) {
+            minikube start --driver=docker
+          }
 
-      - name: Deploy application stack
+      - name: Login to GHCR
+        shell: pwsh
         env:
-          ANSIBLE_HOST_KEY_CHECKING: "False"
-          ANSIBLE_CONFIG: infra/ansible/ansible.cfg
+          GHCR_USER: ${{ github.actor }}
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          set -euo pipefail
-          ansible-playbook -i infra/ansible/inventory.ci.ini infra/ansible/playbooks/deploy_flowboard.yml -e "@/tmp/ansible-vars.json"
+          $ErrorActionPreference = 'Stop'
+          $env:GHCR_TOKEN | docker login ghcr.io --username $env:GHCR_USER --password-stdin
+
+      - name: Deploy to local Minikube
+        shell: pwsh
+        env:
+          BACKEND_IMAGE: ${{ needs.docker-publish.outputs.backend_image }}
+          FRONTEND_IMAGE: ${{ needs.docker-publish.outputs.frontend_image }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if (-not $env:BACKEND_IMAGE -or -not $env:FRONTEND_IMAGE) {
+            throw 'Image outputs are empty. Check docker-publish job outputs.'
+          }
+          .\scripts\deploy_minikube.ps1 -BackendImage $env:BACKEND_IMAGE -FrontendImage $env:FRONTEND_IMAGE
 
       - name: Smoke test deployed app
+        shell: pwsh
         run: |
-          set -euo pipefail
-          curl -fsS -m 20 "http://${DEPLOY_HOST}/api/insights" >/dev/null
-          curl -fsS -m 20 "http://${DEPLOY_HOST}:8080/api/tasks" >/dev/null
+          $ErrorActionPreference = 'Stop'
+          $frontendUrl = (minikube service frontend -n flowboard --url | Select-Object -First 1).Trim()
+          if (-not $frontendUrl) {
+            throw 'Cannot resolve frontend URL from minikube service.'
+          }
+
+          $insights = Invoke-WebRequest -UseBasicParsing -TimeoutSec 20 -Uri "$frontendUrl/api/insights"
+          $tasks = Invoke-WebRequest -UseBasicParsing -TimeoutSec 20 -Uri "$frontendUrl/api/tasks"
+          if ($insights.StatusCode -ne 200 -or $tasks.StatusCode -ne 200) {
+            throw "Smoke test failed. insights=$($insights.StatusCode), tasks=$($tasks.StatusCode)"
+          }
+
+
