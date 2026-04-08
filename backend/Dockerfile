@@ -1,4 +1,7 @@
-FROM golang:1.25 AS build
+ARG GO_IMAGE=mirror.gcr.io/library/golang:1.25
+ARG RUNTIME_IMAGE=mirror.gcr.io/library/debian:bookworm-slim
+
+FROM ${GO_IMAGE} AS build
 
 WORKDIR /app
 
@@ -28,7 +31,7 @@ COPY internal ./internal
 
 RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /bin/server ./cmd/server
 
-FROM debian:bookworm-slim
+FROM ${RUNTIME_IMAGE}
 
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates \
     && rm -rf /var/lib/apt/lists/* \

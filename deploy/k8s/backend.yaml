@@ -3,6 +3,8 @@ kind: Deployment
 metadata:
   name: backend
   namespace: flowboard
+  labels:
+    app: backend
 spec:
   replicas: 1
   selector:
@@ -12,10 +14,41 @@ spec:
     metadata:
       labels:
         app: backend
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/path: /metrics
+        prometheus.io/port: "8080"
     spec:
+      initContainers:
+        - name: wait-for-postgres
+          image: __INIT_POSTGRES_IMAGE__
+          command:
+            - sh
+            - -c
+            - until pg_isready -h "$DB_HOST" -p "$DB_PORT" -U "$DB_USER" -d "$DB_NAME"; do echo "waiting for postgres"; sleep 2; done
+          env:
+            - name: DB_HOST
+              value: postgres
+            - name: DB_PORT
+              value: "5432"
+            - name: DB_USER
+              valueFrom:
+                secretKeyRef:
+                  name: postgres-secret
+                  key: POSTGRES_USER
+            - name: DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: postgres-secret
+                  key: POSTGRES_PASSWORD
+            - name: DB_NAME
+              valueFrom:
+                secretKeyRef:
+                  name: postgres-secret
+                  key: POSTGRES_DB
       containers:
         - name: backend
-          image: ghcr.io/discipliny/dev_ops/backend:latest
+          image: __BACKEND_IMAGE__
           imagePullPolicy: IfNotPresent
           resources:
             requests:
@@ -29,18 +62,37 @@ spec:
           env:
             - name: PORT
               value: "8080"
+            - name: DB_HOST
+              value: postgres
+            - name: DB_PORT
+              value: "5432"
+            - name: DB_USER
+              valueFrom:
+                secretKeyRef:
+                  name: postgres-secret
+                  key: POSTGRES_USER
+            - name: DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: postgres-secret
+                  key: POSTGRES_PASSWORD
+            - name: DB_NAME
+              valueFrom:
+                secretKeyRef:
+                  name: postgres-secret
+                  key: POSTGRES_DB
             - name: DB_DSN
-              value: host=postgres user=flowboard password=flowboard dbname=flowboard port=5432 sslmode=disable TimeZone=UTC
+              value: host=$(DB_HOST) user=$(DB_USER) password=$(DB_PASSWORD) dbname=$(DB_NAME) port=$(DB_PORT) sslmode=disable TimeZone=UTC
           readinessProbe:
             httpGet:
-              path: /api/tasks
+              path: /health
               port: 8080
             initialDelaySeconds: 5
             periodSeconds: 5
             timeoutSeconds: 3
           livenessProbe:
             httpGet:
-              path: /api/tasks
+              path: /health
               port: 8080
             initialDelaySeconds: 20
             periodSeconds: 10
@@ -51,6 +103,8 @@ kind: Service
 metadata:
   name: backend
   namespace: flowboard
+  labels:
+    app: backend
 spec:
   selector:
     app: backend
@@ -58,5 +112,3 @@ spec:
     - name: http
       port: 8080
       targetPort: 8080
-
-
