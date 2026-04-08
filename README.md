@@ -53,20 +53,25 @@ powershell -ExecutionPolicy Bypass -File .\scripts\tf_vm.ps1 -Action apply -Auto
 
 ## ЛР3: Minikube локально
 
-Запуск кластера:
+Полный локальный deploy:
 ```bash
-minikube start --driver=docker
+./scripts/deploy_minikube_local.sh
 ```
 
-Деплой:
-```powershell
-.\scripts\deploy_minikube.ps1
+Идемпотентный повторный deploy тем же скриптом:
+```bash
+./scripts/deploy_minikube_local.sh
+```
+
+HPA-проверка вынесена в opt-in шаг, потому что она специально меняет runtime-состояние:
+```bash
+RUN_HPA_VALIDATION=1 ./scripts/deploy_minikube_local.sh
 ```
 
 Проверка:
 ```bash
 kubectl -n flowboard get pods,svc,hpa
-kubectl -n monitoring get pods
+./scripts/smoke_test_minikube.sh
 ```
 
 ## CI/CD

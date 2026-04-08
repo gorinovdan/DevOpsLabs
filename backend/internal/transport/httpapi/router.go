@@ -3,6 +3,7 @@ package httpapi
 import (
 	"net/http"
 
+	"devopslabs/internal/observability"
 	"devopslabs/internal/repository"
 	"devopslabs/internal/service"
 	"github.com/gin-gonic/gin"
@@ -12,8 +13,10 @@ func NewRouter(taskStore repository.TaskStore) *gin.Engine {
 	r := gin.New()
 	r.Use(gin.Logger())
 	r.Use(gin.Recovery())
+	r.Use(observability.Middleware())
 	r.Use(corsMiddleware())
 
+	r.GET("/metrics", observability.Handler())
 	r.GET("/health", func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"status": "ok"})
 	})

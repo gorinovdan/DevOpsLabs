@@ -15,7 +15,7 @@ spec:
     spec:
       containers:
         - name: frontend
-          image: ghcr.io/discipliny/dev_ops/frontend:latest
+          image: __FRONTEND_IMAGE__
           imagePullPolicy: IfNotPresent
           resources:
             requests:
@@ -55,5 +55,4 @@ spec:
       port: 80
       targetPort: 80
       nodePort: 30080
-
 
