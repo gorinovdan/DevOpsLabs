@@ -1,17 +1,22 @@
-# You can keep twc_token empty and set environment variable TWC_TOKEN instead.
-# twc_token = "<TIMEWEB_API_TOKEN>"
+# Local VM is created with Multipass (not Timeweb Cloud).
 
 server_name = "flowboard-lab-vm"
-location    = "ru-1"
 
-# Adjust VM size if needed.
-cpu     = 1
-ram_mb  = 1024
-disk_mb = 15360
+# Adjust local VM size if needed.
+cpu     = 2
+ram_mb  = 2048
+disk_mb = 20480
 
-# Optional existing project ID. Leave empty to use default project.
-project_id = ""
+# Local VM SSH settings.
+ssh_user            = "ubuntu"
+# On Windows use full path, for example: C:/Users/<you>/.ssh/id_ed25519.pub
+ssh_public_key_path = "C:/Users/<you>/.ssh/id_ed25519.pub"
 
-# Path to public SSH key on the machine where terraform is executed.
-ssh_key_name        = "flowboard-lab-key"
-ssh_public_key_path = "~/.ssh/id_ed25519.pub"
+# Explicit path makes Terraform independent from PATH environment.
+multipass_executable = "C:/Program Files/Multipass/bin/multipass.exe"
+
+# Multipass backend driver. Use:
+# - "hyperv" if Hyper-V is installed,
+# - "virtualbox" if using Oracle VirtualBox backend,
+# - "auto" to keep current Multipass setting.
+multipass_driver = "auto"

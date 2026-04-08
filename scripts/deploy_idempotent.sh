@@ -1,6 +1,5 @@
 #!/usr/bin/env bash
 set -euo pipefail
-
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 TF_DIR="${TF_DIR:-${ROOT_DIR}/infra/terraform}"
 ANSIBLE_DIR="${ANSIBLE_DIR:-${ROOT_DIR}/infra/ansible}"
@@ -13,6 +12,7 @@ FORCE_REBUILD="${FORCE_REBUILD:-0}"
 
 SSH_KEY_PATH="${SSH_KEY_PATH:-${HOME}/.ssh/id_ed25519}"
 SSH_KEY_COMMENT="${SSH_KEY_COMMENT:-flowboard-lab}"
+SSH_USER="${SSH_USER:-ubuntu}"
 
 DEPLOY_DIR="${DEPLOY_DIR:-/opt/flowboard}"
 COMPOSE_FILE_NAME="${COMPOSE_FILE_NAME:-docker-compose.prod.yml}"
@@ -22,14 +22,9 @@ DB_NAME="${DB_NAME:-flowboard}"
 
 SERVER_NAME="${SERVER_NAME:-flowboard-lab-vm}"
 SERVER_COMMENT="${SERVER_COMMENT:-Created by deploy_idempotent.sh}"
-LOCATION="${LOCATION:-ru-1}"
-OS_NAME="${OS_NAME:-ubuntu}"
-OS_VERSION="${OS_VERSION:-22.04}"
 CPU="${CPU:-2}"
-RAM_MB="${RAM_MB:-1024}"
-DISK_MB="${DISK_MB:-15360}"
-PROJECT_ID="${PROJECT_ID:-}"
-SSH_KEY_NAME="${SSH_KEY_NAME:-flowboard-lab-key}"
+RAM_MB="${RAM_MB:-2048}"
+DISK_MB="${DISK_MB:-20480}"
 
 STATUS_WAIT_ATTEMPTS="${STATUS_WAIT_ATTEMPTS:-60}"
 STATUS_WAIT_DELAY_SEC="${STATUS_WAIT_DELAY_SEC:-10}"
@@ -37,17 +32,6 @@ SSH_WAIT_ATTEMPTS="${SSH_WAIT_ATTEMPTS:-60}"
 SSH_WAIT_DELAY_SEC="${SSH_WAIT_DELAY_SEC:-5}"
 TF_RETRY_ATTEMPTS="${TF_RETRY_ATTEMPTS:-5}"
 TF_RETRY_DELAY_SEC="${TF_RETRY_DELAY_SEC:-5}"
-
-if [[ -z "${TWC_TOKEN:-}" ]]; then
-  echo "Error: TWC_TOKEN is required."
-  echo "Example: TWC_TOKEN='<token>' ${0}"
-  exit 1
-fi
-
-if [[ "${TWC_TOKEN}" =~ ^\<.*\>$ ]]; then
-  echo "Error: TWC_TOKEN looks like a placeholder (${TWC_TOKEN}). Set a real Timeweb API token."
-  exit 1
-fi
 
 log() {
   printf '[%s] %s\n' "$(date +'%Y-%m-%d %H:%M:%S')" "$*"
@@ -118,21 +102,16 @@ ensure_tfvars() {
   log "Creating Terraform vars file: ${TF_AUTO_VARS_FILE}"
   cat > "${TF_AUTO_VARS_FILE}" <<EOF
 server_name = "${SERVER_NAME}"
-server_comment = "${SERVER_COMMENT}"
-location = "${LOCATION}"
-os_name = "${OS_NAME}"
-os_version = "${OS_VERSION}"
 cpu = ${CPU}
 ram_mb = ${RAM_MB}
 disk_mb = ${DISK_MB}
-project_id = "${PROJECT_ID}"
-ssh_key_name = "${SSH_KEY_NAME}"
+ssh_user = "${SSH_USER}"
 ssh_public_key_path = "${SSH_KEY_PATH}.pub"
 EOF
 }
 
 tf() {
-  TWC_TOKEN="${TWC_TOKEN}" terraform -chdir="${TF_DIR}" "$@"
+  terraform -chdir="${TF_DIR}" "$@"
 }
 
 tf_state_rm_if_present() {
@@ -221,7 +200,7 @@ wait_for_ssh() {
   local ip="$1"
   local attempt
   for attempt in $(seq 1 "${SSH_WAIT_ATTEMPTS}"); do
-    if ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new -o ConnectTimeout=5 -i "${SSH_KEY_PATH}" "root@${ip}" "echo ok" >/dev/null 2>&1; then
+    if ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new -o ConnectTimeout=5 -i "${SSH_KEY_PATH}" "${SSH_USER}@${ip}" "echo ok" >/dev/null 2>&1; then
       return 0
     fi
     log "SSH is not ready yet (attempt ${attempt}/${SSH_WAIT_ATTEMPTS})"
@@ -260,7 +239,7 @@ run_ansible_install_docker() {
 
   cat > "${inventory_file}" <<EOF
 [app]
-${vm_ip} ansible_user=root ansible_ssh_private_key_file=${SSH_KEY_PATH}
+${vm_ip} ansible_user=${SSH_USER} ansible_ssh_private_key_file=${SSH_KEY_PATH}
 EOF
 
   ANSIBLE_CONFIG="${ANSIBLE_DIR}/ansible.cfg" ansible-playbook -i "${inventory_file}" "${ANSIBLE_DIR}/playbooks/install_docker.yml"
@@ -276,7 +255,7 @@ run_ansible_deploy_stack() {
 
   cat > "${inventory_file}" <<EOF
 [app]
-${vm_ip} ansible_user=root ansible_ssh_private_key_file=${SSH_KEY_PATH}
+${vm_ip} ansible_user=${SSH_USER} ansible_ssh_private_key_file=${SSH_KEY_PATH}
 EOF
 
   ANSIBLE_CONFIG="${ANSIBLE_DIR}/ansible.cfg" ansible-playbook -i "${inventory_file}" "${ANSIBLE_DIR}/playbooks/deploy_flowboard.yml" \
@@ -313,8 +292,12 @@ is_stack_current() {
 
 smoke_test() {
   local vm_ip="$1"
-  curl -fsS -m 15 "http://${vm_ip}/api/insights" >/dev/null
-  curl -fsS -m 15 "http://${vm_ip}:8080/api/tasks" >/dev/null
+  ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new -o ConnectTimeout=10 -i "${SSH_KEY_PATH}" "${SSH_USER}@${vm_ip}" '
+    set -euo pipefail
+    frontend_url="$(minikube service frontend -n flowboard --url | head -n 1)"
+    curl -fsS -m 20 "${frontend_url}/api/insights" >/dev/null
+    curl -fsS -m 20 "${frontend_url}/api/tasks" >/dev/null
+  '
 }
 
 main() {
@@ -354,12 +337,8 @@ main() {
   log "Running Ansible Docker installation playbook..."
   run_ansible_install_docker "${VM_IP}"
 
-  if is_stack_current "${VM_IP}" "${BACKEND_IMAGE}" "${FRONTEND_IMAGE}"; then
-    log "Stack already runs required images; skipping deploy playbook."
-  else
-    log "Deploying application stack with Ansible..."
-    run_ansible_deploy_stack "${VM_IP}" "${BACKEND_IMAGE}" "${FRONTEND_IMAGE}"
-  fi
+  log "Deploying application stack with Ansible..."
+  run_ansible_deploy_stack "${VM_IP}" "${BACKEND_IMAGE}" "${FRONTEND_IMAGE}"
 
   log "Running smoke tests..."
   smoke_test "${VM_IP}"
@@ -367,10 +346,12 @@ main() {
   log "Deployment completed successfully."
   echo ""
   echo "VM IP: ${VM_IP}"
-  echo "Frontend: http://${VM_IP}/"
-  echo "Backend API: http://${VM_IP}:8080/api/tasks"
+  echo "Frontend/Backend are served inside minikube on VM."
+  echo "Use SSH and run: minikube service frontend -n flowboard --url"
   echo "Backend image: ${BACKEND_IMAGE}"
   echo "Frontend image: ${FRONTEND_IMAGE}"
 }
 
 main "$@"
+
+

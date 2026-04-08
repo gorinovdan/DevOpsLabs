@@ -1,0 +1,172 @@
+---
+- name: Install Docker and Minikube via local Ansible + Multipass
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    vm_name: "{{ lookup('env', 'FLOWBOARD_VM_NAME') | default('flowboard-lab-vm', true) }}"
+    vm_user: "{{ lookup('env', 'FLOWBOARD_VM_USER') | default('ubuntu', true) }}"
+    multipass_bin: "{{ lookup('env', 'FLOWBOARD_MULTIPASS_BIN') | default('', true) }}"
+
+  tasks:
+    - name: Ensure multipass binary path is provided
+      ansible.builtin.fail:
+        msg: "FLOWBOARD_MULTIPASS_BIN is empty. Cannot run multipass commands."
+      when: multipass_bin | length == 0
+
+    - name: Update apt cache in VM
+      ansible.builtin.command:
+        argv:
+          - "{{ multipass_bin }}"
+          - exec
+          - "{{ vm_name }}"
+          - --
+          - bash
+          - -lc
+          - sudo apt-get update -y
+      changed_when: false
+
+    - name: Install base packages and Docker in VM
+      ansible.builtin.command:
+        argv:
+          - "{{ multipass_bin }}"
+          - exec
+          - "{{ vm_name }}"
+          - --
+          - bash
+          - -lc
+          - sudo DEBIAN_FRONTEND=noninteractive apt-get install -y ca-certificates curl gnupg conntrack socat docker.io
+      changed_when: false
+
+    - name: Enable and start Docker service in VM
+      ansible.builtin.command:
+        argv:
+          - "{{ multipass_bin }}"
+          - exec
+          - "{{ vm_name }}"
+          - --
+          - bash
+          - -lc
+          - sudo systemctl enable --now docker
+      changed_when: false
+
+    - name: Add VM user to docker group
+      ansible.builtin.command:
+        argv:
+          - "{{ multipass_bin }}"
+          - exec
+          - "{{ vm_name }}"
+          - --
+          - bash
+          - -lc
+          - "sudo usermod -aG docker {{ vm_user }}"
+      changed_when: false
+
+    - name: Install kubectl in VM
+      ansible.builtin.command:
+        argv:
+          - "{{ multipass_bin }}"
+          - exec
+          - "{{ vm_name }}"
+          - --
+          - bash
+          - -lc
+          - |
+            set -eu
+            if ! command -v kubectl >/dev/null 2>&1; then
+              sudo curl -fsSL -o /usr/local/bin/kubectl https://dl.k8s.io/release/v1.30.6/bin/linux/amd64/kubectl
+              sudo chmod +x /usr/local/bin/kubectl
+            fi
+      changed_when: false
+
+    - name: Install minikube in VM
+      ansible.builtin.command:
+        argv:
+          - "{{ multipass_bin }}"
+          - exec
+          - "{{ vm_name }}"
+          - --
+          - bash
+          - -lc
+          - |
+            set -eu
+            if ! command -v minikube >/dev/null 2>&1; then
+              sudo curl -fsSL -o /usr/local/bin/minikube https://storage.googleapis.com/minikube/releases/v1.38.1/minikube-linux-amd64
+              sudo chmod +x /usr/local/bin/minikube
+            fi
+      changed_when: false
+
+    - name: Start minikube in VM
+      ansible.builtin.command:
+        argv:
+          - "{{ multipass_bin }}"
+          - exec
+          - "{{ vm_name }}"
+          - --
+          - bash
+          - -lc
+          - |
+            set -eu
+            mem_total_mb="$(awk '/MemTotal/ {print int($2/1024)}' /proc/meminfo)"
+            mem_mb="$((mem_total_mb - 256))"
+            if [ "$mem_mb" -lt 1024 ]; then mem_mb=1024; fi
+            if [ "$mem_mb" -gt 2048 ]; then mem_mb=2048; fi
+            cpus="$(nproc)"
+            if [ "$cpus" -gt 2 ]; then cpus=2; fi
+            if [ "$cpus" -lt 1 ]; then cpus=1; fi
+            sudo -iu {{ vm_user }} bash -lc "if ! minikube status >/dev/null 2>&1; then minikube start --driver=docker --force --cpus=${cpus} --memory=${mem_mb}; fi"
+      changed_when: false
+
+    - name: Enable metrics-server addon
+      ansible.builtin.command:
+        argv:
+          - "{{ multipass_bin }}"
+          - exec
+          - "{{ vm_name }}"
+          - --
+          - bash
+          - -lc
+          - sudo -iu {{ vm_user }} bash -lc "if command -v sg >/dev/null 2>&1; then sg docker -c 'minikube addons enable metrics-server'; else minikube addons enable metrics-server; fi"
+      changed_when: false
+
+    - name: Wait for minikube node to become Ready
+      ansible.builtin.command:
+        argv:
+          - "{{ multipass_bin }}"
+          - exec
+          - "{{ vm_name }}"
+          - --
+          - bash
+          - -lc
+          - sudo -iu {{ vm_user }} bash -lc "if command -v sg >/dev/null 2>&1; then sg docker -c 'kubectl wait --for=condition=Ready node/minikube --timeout=300s'; else kubectl wait --for=condition=Ready node/minikube --timeout=300s; fi"
+      changed_when: false
+
+    - name: Show Docker version
+      ansible.builtin.command:
+        argv:
+          - "{{ multipass_bin }}"
+          - exec
+          - "{{ vm_name }}"
+          - --
+          - docker
+          - --version
+      register: docker_version
+      changed_when: false
+
+    - name: Show Minikube version
+      ansible.builtin.command:
+        argv:
+          - "{{ multipass_bin }}"
+          - exec
+          - "{{ vm_name }}"
+          - --
+          - minikube
+          - version
+      register: minikube_version
+      changed_when: false
+
+    - name: Print versions
+      ansible.builtin.debug:
+        msg:
+          - "{{ docker_version.stdout }}"
+          - "{{ minikube_version.stdout_lines[0] | default(minikube_version.stdout) }}"

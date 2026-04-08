@@ -1,0 +1,62 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: backend
+  namespace: flowboard
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: backend
+  template:
+    metadata:
+      labels:
+        app: backend
+    spec:
+      containers:
+        - name: backend
+          image: ghcr.io/discipliny/dev_ops/backend:latest
+          imagePullPolicy: IfNotPresent
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "128Mi"
+            limits:
+              cpu: "500m"
+              memory: "512Mi"
+          ports:
+            - containerPort: 8080
+          env:
+            - name: PORT
+              value: "8080"
+            - name: DB_DSN
+              value: host=postgres user=flowboard password=flowboard dbname=flowboard port=5432 sslmode=disable TimeZone=UTC
+          readinessProbe:
+            httpGet:
+              path: /api/tasks
+              port: 8080
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            timeoutSeconds: 3
+          livenessProbe:
+            httpGet:
+              path: /api/tasks
+              port: 8080
+            initialDelaySeconds: 20
+            periodSeconds: 10
+            timeoutSeconds: 3
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: backend
+  namespace: flowboard
+spec:
+  selector:
+    app: backend
+  ports:
+    - name: http
+      port: 8080
+      targetPort: 8080
+
+

@@ -1,8 +1,7 @@
 deploy_dir: /opt/flowboard
-compose_file_name: docker-compose.prod.yml
 
-backend_image: ttl.sh/flowboard-backend:24h
-frontend_image: ttl.sh/flowboard-frontend:24h
+backend_image: ghcr.io/discipliny/dev_ops/backend:latest
+frontend_image: ghcr.io/discipliny/dev_ops/frontend:latest
 
 db_user: flowboard
 db_password: flowboard
