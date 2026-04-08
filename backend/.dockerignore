@@ -5,6 +5,7 @@
 **/.DS_Store
 **/coverage
 **/coverage.out
+**/*_test.go
 **/*.db
 **/*.db-wal
 **/*.db-shm

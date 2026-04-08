@@ -3,9 +3,12 @@ FROM node:20-alpine AS build
 WORKDIR /app
 
 COPY package.json package-lock.json ./
-RUN npm ci
+RUN npm ci --no-audit --no-fund
 
-COPY . .
+COPY index.html ./
+COPY tsconfig.json tsconfig.app.json tsconfig.node.json ./
+COPY vite.config.ts ./
+COPY src ./src
 
 ARG VITE_API_URL=
 ENV VITE_API_URL=${VITE_API_URL}
