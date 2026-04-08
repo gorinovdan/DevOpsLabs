@@ -34,7 +34,8 @@ TF_RETRY_ATTEMPTS="${TF_RETRY_ATTEMPTS:-5}"
 TF_RETRY_DELAY_SEC="${TF_RETRY_DELAY_SEC:-5}"
 
 log() {
-  printf '[%s] %s\n' "$(date +'%Y-%m-%d %H:%M:%S')" "$*"
+  # Keep logs on stderr so command substitution captures only function outputs.
+  printf '[%s] %s\n' "$(date +'%Y-%m-%d %H:%M:%S')" "$*" >&2
 }
 
 require_cmd() {
