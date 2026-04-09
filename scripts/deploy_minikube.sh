@@ -50,77 +50,11 @@ resolve_local_image_names() {
 }
 
 build_backend_image_with_host_tools() {
-  local backend_context
-
-  if docker image inspect "${LOCAL_BACKEND_IMAGE}" >/dev/null 2>&1; then
-    echo "Using cached backend image: ${LOCAL_BACKEND_IMAGE}"
-    return 0
-  fi
-
-  require_cmd go
-
-  backend_context="$(mktemp -d)"
-  trap 'rm -rf "${backend_context}"' RETURN
-
-  echo "Building backend binary on host..."
-  (
-    cd "${ROOT_DIR}/backend"
-    CGO_ENABLED=0 GOOS=linux GOARCH="$(go env GOARCH)" go build -trimpath -ldflags="-s -w" -o "${backend_context}/server" ./cmd/server
-  )
-
-  cat > "${backend_context}/Dockerfile" <<'EOF'
-FROM scratch
-COPY server /server
-ENV PORT=8080
-EXPOSE 8080
-USER 10001:10001
-ENTRYPOINT ["/server"]
-EOF
-
-  echo "Packaging backend runtime image: ${LOCAL_BACKEND_IMAGE}"
-  docker build -t "${LOCAL_BACKEND_IMAGE}" "${backend_context}" >/dev/null
-
-  trap - RETURN
-  rm -rf "${backend_context}"
+  build_backend_runtime_image_with_host_tools "${ROOT_DIR}" "${LOCAL_BACKEND_IMAGE}"
 }
 
 build_frontend_image_with_host_tools() {
-  local frontend_context
-
-  if docker image inspect "${LOCAL_FRONTEND_IMAGE}" >/dev/null 2>&1; then
-    echo "Using cached frontend image: ${LOCAL_FRONTEND_IMAGE}"
-    return 0
-  fi
-
-  require_cmd npm
-
-  if [[ ! -d "${ROOT_DIR}/frontend/node_modules" ]]; then
-    echo "Installing frontend dependencies..."
-    (cd "${ROOT_DIR}/frontend" && npm ci --prefer-offline >/dev/null)
-  fi
-
-  echo "Building frontend assets on host..."
-  (cd "${ROOT_DIR}/frontend" && npm run build >/dev/null)
-
-  frontend_context="$(mktemp -d)"
-  trap 'rm -rf "${frontend_context}"' RETURN
-
-  cp "${ROOT_DIR}/frontend/nginx.conf" "${frontend_context}/nginx.conf"
-  cp -R "${ROOT_DIR}/frontend/dist" "${frontend_context}/dist"
-
-  cat > "${frontend_context}/Dockerfile" <<EOF
-FROM ${FRONTEND_NGINX_IMAGE}
-COPY nginx.conf /etc/nginx/conf.d/default.conf
-COPY dist /usr/share/nginx/html
-EXPOSE 80
-CMD ["nginx", "-g", "daemon off;"]
-EOF
-
-  echo "Packaging frontend runtime image: ${LOCAL_FRONTEND_IMAGE}"
-  docker build -t "${LOCAL_FRONTEND_IMAGE}" "${frontend_context}" >/dev/null
-
-  trap - RETURN
-  rm -rf "${frontend_context}"
+  build_frontend_runtime_image_with_host_tools "${ROOT_DIR}" "${LOCAL_FRONTEND_IMAGE}" "${FRONTEND_NGINX_IMAGE}"
 }
 
 build_and_load_local_images() {
