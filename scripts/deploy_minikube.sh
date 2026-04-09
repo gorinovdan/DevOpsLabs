@@ -155,12 +155,12 @@ setup_port_forwards() {
     return 0
   fi
 
-  ensure_port_forward "frontend" "${NAMESPACE}" "frontend" "${FRONTEND_LOCAL_PORT}" 80
-  ensure_port_forward "backend" "${NAMESPACE}" "backend" "${BACKEND_LOCAL_PORT}" 8080
+  ensure_port_forward "frontend" "${NAMESPACE}" "frontend" "${FRONTEND_LOCAL_PORT}" 80 "/"
+  ensure_port_forward "backend" "${NAMESPACE}" "backend" "${BACKEND_LOCAL_PORT}" 8080 "/health"
 
   if [[ "${ENABLE_OBSERVABILITY}" == "1" ]]; then
-    ensure_port_forward "grafana" "monitoring" "grafana" "${GRAFANA_LOCAL_PORT}" 80
-    ensure_port_forward "prometheus" "monitoring" "prometheus" "${PROMETHEUS_LOCAL_PORT}" 9090
+    ensure_port_forward "grafana" "monitoring" "grafana" "${GRAFANA_LOCAL_PORT}" 80 "/api/health"
+    ensure_port_forward "prometheus" "monitoring" "prometheus" "${PROMETHEUS_LOCAL_PORT}" 9090 "/-/healthy"
   fi
 }
 
