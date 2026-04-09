@@ -8,6 +8,130 @@ require_cmd() {
   fi
 }
 
+compute_file_hash() {
+  local file_path="$1"
+
+  shasum -a 256 "${file_path}" | awk '{print $1}'
+}
+
+ensure_frontend_dependencies() {
+  local frontend_dir="$1"
+  local lock_file="${frontend_dir}/package-lock.json"
+  local modules_dir="${frontend_dir}/node_modules"
+  local stamp_file="${modules_dir}/.package-lock.sha256"
+  local current_hash=""
+  local cached_hash=""
+
+  require_cmd npm
+
+  if [[ ! -f "${lock_file}" ]]; then
+    echo "Error: frontend lock file not found: ${lock_file}" >&2
+    exit 1
+  fi
+
+  current_hash="$(compute_file_hash "${lock_file}")"
+  if [[ -f "${stamp_file}" ]]; then
+    cached_hash="$(cat "${stamp_file}")"
+  fi
+
+  if [[ -d "${modules_dir}" && "${current_hash}" == "${cached_hash}" ]]; then
+    echo "Reusing cached frontend dependencies."
+    return 0
+  fi
+
+  echo "Installing frontend dependencies..."
+  (
+    cd "${frontend_dir}"
+    npm ci --prefer-offline
+  )
+
+  mkdir -p "${modules_dir}"
+  printf '%s\n' "${current_hash}" > "${stamp_file}"
+}
+
+build_backend_runtime_image_with_host_tools() {
+  local project_root="$1"
+  local target_image="$2"
+  local backend_context
+  local target_arch
+
+  require_cmd go
+  require_cmd docker
+
+  if docker image inspect "${target_image}" >/dev/null 2>&1; then
+    echo "Using cached backend image: ${target_image}"
+    return 0
+  fi
+
+  backend_context="$(mktemp -d)"
+  trap 'rm -rf "${backend_context}"' RETURN
+  target_arch="$(go env GOARCH)"
+
+  echo "Building backend binary on host..."
+  (
+    cd "${project_root}/backend"
+    CGO_ENABLED=0 GOOS=linux GOARCH="${target_arch}" go build -trimpath -ldflags="-s -w" -o "${backend_context}/server" ./cmd/server
+  )
+
+  cat > "${backend_context}/Dockerfile" <<'EOF'
+FROM scratch
+COPY server /server
+ENV PORT=8080
+EXPOSE 8080
+USER 10001:10001
+ENTRYPOINT ["/server"]
+EOF
+
+  echo "Packaging backend runtime image: ${target_image}"
+  docker build -t "${target_image}" "${backend_context}" >/dev/null
+
+  trap - RETURN
+  rm -rf "${backend_context}"
+}
+
+build_frontend_runtime_image_with_host_tools() {
+  local project_root="$1"
+  local target_image="$2"
+  local nginx_image="${3:-nginx:1.25-alpine}"
+  local frontend_context
+
+  require_cmd docker
+  ensure_frontend_dependencies "${project_root}/frontend"
+
+  if docker image inspect "${target_image}" >/dev/null 2>&1; then
+    echo "Using cached frontend image: ${target_image}"
+    return 0
+  fi
+
+  ensure_host_image "${nginx_image}"
+
+  echo "Building frontend assets on host..."
+  (
+    cd "${project_root}/frontend"
+    npm run build >/dev/null
+  )
+
+  frontend_context="$(mktemp -d)"
+  trap 'rm -rf "${frontend_context}"' RETURN
+
+  cp "${project_root}/frontend/nginx.conf" "${frontend_context}/nginx.conf"
+  cp -R "${project_root}/frontend/dist" "${frontend_context}/dist"
+
+  cat > "${frontend_context}/Dockerfile" <<EOF
+FROM ${nginx_image}
+COPY nginx.conf /etc/nginx/conf.d/default.conf
+COPY dist /usr/share/nginx/html
+EXPOSE 80
+CMD ["nginx", "-g", "daemon off;"]
+EOF
+
+  echo "Packaging frontend runtime image: ${target_image}"
+  docker build -t "${target_image}" "${frontend_context}" >/dev/null
+
+  trap - RETURN
+  rm -rf "${frontend_context}"
+}
+
 ensure_minikube_running() {
   local auto_start="${1:-0}"
   local driver="${2:-docker}"
