@@ -6,7 +6,9 @@ K8S_DIR="${K8S_DIR:-${ROOT_DIR}/deploy/k8s}"
 NAMESPACE="${NAMESPACE:-flowboard}"
 
 BUILD_LOCAL="${BUILD_LOCAL:-0}"
+BUILD_OBSERVABILITY_LOCAL="${BUILD_OBSERVABILITY_LOCAL:-0}"
 ENABLE_OBSERVABILITY="${ENABLE_OBSERVABILITY:-1}"
+ENABLE_PORT_FORWARD="${ENABLE_PORT_FORWARD:-0}"
 RUN_SMOKE_TEST="${RUN_SMOKE_TEST:-0}"
 RUN_HPA_VALIDATION="${RUN_HPA_VALIDATION:-0}"
 AUTO_START_MINIKUBE="${AUTO_START_MINIKUBE:-0}"
@@ -23,10 +25,16 @@ LOCAL_FRONTEND_IMAGE="${LOCAL_FRONTEND_IMAGE:-}"
 INIT_POSTGRES_IMAGE="${INIT_POSTGRES_IMAGE:-postgres:16-alpine}"
 POSTGRES_IMAGE="${POSTGRES_IMAGE:-postgres:16-alpine}"
 METRICS_SERVER_IMAGE="${METRICS_SERVER_IMAGE:-registry.k8s.io/metrics-server/metrics-server:v0.8.1}"
-PROMETHEUS_IMAGE="${PROMETHEUS_IMAGE:-prom/prometheus:v2.54.1}"
-GRAFANA_IMAGE="${GRAFANA_IMAGE:-grafana/grafana:11.2.2}"
+PROMETHEUS_IMAGE="${PROMETHEUS_IMAGE:-quay.io/prometheus/prometheus:v2.54.1}"
+GRAFANA_IMAGE="${GRAFANA_IMAGE:-docker.io/grafana/grafana-oss:11.2.2}"
 LOADGEN_IMAGE="${LOADGEN_IMAGE:-busybox:1.36}"
 FRONTEND_NGINX_IMAGE="${FRONTEND_NGINX_IMAGE:-nginx:1.25-alpine}"
+PROMETHEUS_RELEASE_VERSION="${PROMETHEUS_RELEASE_VERSION:-2.54.1}"
+GRAFANA_RELEASE_VERSION="${GRAFANA_RELEASE_VERSION:-11.2.2}"
+FRONTEND_LOCAL_PORT="${FRONTEND_LOCAL_PORT:-18081}"
+BACKEND_LOCAL_PORT="${BACKEND_LOCAL_PORT:-18080}"
+GRAFANA_LOCAL_PORT="${GRAFANA_LOCAL_PORT:-13000}"
+PROMETHEUS_LOCAL_PORT="${PROMETHEUS_LOCAL_PORT:-19090}"
 
 source "${ROOT_DIR}/scripts/lib_minikube.sh"
 
@@ -162,6 +170,18 @@ ensure_metrics_server() {
   exit 1
 }
 
+prepare_observability_images() {
+  if [[ "${ENABLE_OBSERVABILITY}" != "1" || "${BUILD_OBSERVABILITY_LOCAL}" != "1" ]]; then
+    return 0
+  fi
+
+  build_local_observability_images \
+    "${PROMETHEUS_IMAGE}" \
+    "${PROMETHEUS_RELEASE_VERSION}" \
+    "${GRAFANA_IMAGE}" \
+    "${GRAFANA_RELEASE_VERSION}"
+}
+
 apply_template_manifest() {
   local template_path="$1"
   local rendered_path
@@ -188,17 +208,41 @@ apply_application_manifests() {
   kubectl -n "${NAMESPACE}" rollout status deployment/frontend --timeout=300s
 }
 
+setup_port_forwards() {
+  if [[ "${ENABLE_PORT_FORWARD}" != "1" ]]; then
+    return 0
+  fi
+
+  ensure_port_forward "frontend" "${NAMESPACE}" "frontend" "${FRONTEND_LOCAL_PORT}" 80
+  ensure_port_forward "backend" "${NAMESPACE}" "backend" "${BACKEND_LOCAL_PORT}" 8080
+
+  if [[ "${ENABLE_OBSERVABILITY}" == "1" ]]; then
+    ensure_port_forward "grafana" "monitoring" "grafana" "${GRAFANA_LOCAL_PORT}" 80
+    ensure_port_forward "prometheus" "monitoring" "prometheus" "${PROMETHEUS_LOCAL_PORT}" 9090
+  fi
+}
+
 print_status() {
   echo
   echo "Kubernetes resources in namespace ${NAMESPACE}:"
   kubectl -n "${NAMESPACE}" get pods,svc,hpa
 
   echo
-  echo "Port-forward helpers:"
-  echo "  Frontend  : kubectl -n ${NAMESPACE} port-forward svc/frontend 18081:80"
-  echo "  Backend   : kubectl -n ${NAMESPACE} port-forward svc/backend 18080:8080"
-  echo "  Grafana   : kubectl -n monitoring port-forward svc/grafana 13000:80"
-  echo "  Prometheus: kubectl -n monitoring port-forward svc/prometheus 19090:9090"
+  if [[ "${ENABLE_PORT_FORWARD}" == "1" ]]; then
+    echo "Active local endpoints:"
+    echo "  Frontend  : http://127.0.0.1:${FRONTEND_LOCAL_PORT}"
+    echo "  Backend   : http://127.0.0.1:${BACKEND_LOCAL_PORT}"
+    if [[ "${ENABLE_OBSERVABILITY}" == "1" ]]; then
+      echo "  Grafana   : http://127.0.0.1:${GRAFANA_LOCAL_PORT}"
+      echo "  Prometheus: http://127.0.0.1:${PROMETHEUS_LOCAL_PORT}"
+    fi
+  else
+    echo "Port-forward helpers:"
+    echo "  Frontend  : kubectl -n ${NAMESPACE} port-forward svc/frontend ${FRONTEND_LOCAL_PORT}:80"
+    echo "  Backend   : kubectl -n ${NAMESPACE} port-forward svc/backend ${BACKEND_LOCAL_PORT}:8080"
+    echo "  Grafana   : kubectl -n monitoring port-forward svc/grafana ${GRAFANA_LOCAL_PORT}:80"
+    echo "  Prometheus: kubectl -n monitoring port-forward svc/prometheus ${PROMETHEUS_LOCAL_PORT}:9090"
+  fi
 }
 
 require_cmd minikube
@@ -211,6 +255,8 @@ if [[ "${BUILD_LOCAL}" == "1" ]]; then
   build_and_load_local_images
 fi
 
+prepare_observability_images
+
 ensure_metrics_server
 
 if [[ "${ENABLE_OBSERVABILITY}" == "1" ]]; then
@@ -218,10 +264,15 @@ if [[ "${ENABLE_OBSERVABILITY}" == "1" ]]; then
 fi
 
 apply_application_manifests
+setup_port_forwards
 print_status
 
 if [[ "${RUN_SMOKE_TEST}" == "1" ]]; then
-  "${ROOT_DIR}/scripts/smoke_test_minikube.sh"
+  if [[ "${ENABLE_PORT_FORWARD}" == "1" ]]; then
+    FRONTEND_URL="http://127.0.0.1:${FRONTEND_LOCAL_PORT}" "${ROOT_DIR}/scripts/smoke_test_minikube.sh"
+  else
+    "${ROOT_DIR}/scripts/smoke_test_minikube.sh"
+  fi
 fi
 
 if [[ "${RUN_HPA_VALIDATION}" == "1" ]]; then
