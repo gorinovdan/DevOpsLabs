@@ -14,24 +14,14 @@
 
 Ключевые файлы:
 - `infra/terraform/main.tf`, `infra/terraform/variables.tf`, `infra/terraform/outputs.tf`
-- `scripts/tf_vm.ps1`
 - `infra/ansible/playbooks/install_docker.yml`
 - `infra/ansible/playbooks/deploy_flowboard.yml`
 - `backend/Dockerfile`, `frontend/Dockerfile`, `docker-compose.yml`
 - `.github/workflows/ci.yml` (job `docker-publish`)
 
 ## 3. Terraform (локальная VM)
-Однокомандный запуск:
-
-```powershell
-powershell -ExecutionPolicy Bypass -File .\scripts\tf_vm.ps1 -Action apply -AutoApprove
-```
-
-Что делает скрипт:
-- проверяет/устанавливает зависимости (`multipass`, `terraform`, fallback `tofu`),
-- приводит `terraform.tfvars` к актуальному формату,
-- выполняет `terraform init/validate/apply`,
-- выводит IP и SSH-команду для локальной VM.
+Terraform-конфигурация для локальной VM сохранена в `infra/terraform/*` как часть LAB2.
+В активном сценарии репозитория для LAB3 используется локальный `minikube` и bash-скрипты; PowerShell-обвязка для VM удалена.
 
 ## 4. Ansible (настройка VM)
 После создания VM можно запустить playbook'и:

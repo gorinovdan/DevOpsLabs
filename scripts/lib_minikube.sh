@@ -270,6 +270,7 @@ render_template_file() {
     -e "s#__INIT_POSTGRES_IMAGE__#${INIT_POSTGRES_IMAGE}#g" \
     -e "s#__PROMETHEUS_IMAGE__#${PROMETHEUS_IMAGE}#g" \
     -e "s#__GRAFANA_IMAGE__#${GRAFANA_IMAGE}#g" \
+    -e "s#__KUBE_STATE_METRICS_IMAGE__#${KUBE_STATE_METRICS_IMAGE}#g" \
     "${source_file}" > "${target_file}"
 }
 

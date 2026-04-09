@@ -40,17 +40,6 @@ docker compose up --build
 docker compose down
 ```
 
-## ЛР2: локальная VM через Terraform
-Однокомандный запуск локальной VM (Multipass):
-
-```powershell
-powershell -ExecutionPolicy Bypass -File .\scripts\tf_vm.ps1 -Action apply -AutoApprove
-```
-
-Скрипт и IaC:
-- `scripts/tf_vm.ps1`
-- `infra/terraform/*`
-
 ## ЛР3: Minikube локально
 
 Полный локальный deploy:
@@ -73,15 +62,16 @@ powershell -ExecutionPolicy Bypass -File .\scripts\tf_vm.ps1 -Action apply -Auto
 MINIKUBE_ACTION=delete PURGE=1 ./scripts/stop_minikube_local.sh
 ```
 
-HPA-проверка вынесена в opt-in шаг, потому что она специально меняет runtime-состояние:
+Проверка HPA:
 ```bash
-RUN_HPA_VALIDATION=1 ./scripts/deploy_minikube_local.sh
+./scripts/load_test_backend_hpa.sh
 ```
 
 Проверка:
 ```bash
 kubectl -n flowboard get pods,svc,hpa
 ./scripts/smoke_test_minikube.sh
+./scripts/verify_observability_minikube.sh
 ```
 
 ## CI/CD
@@ -97,8 +87,14 @@ Publish job:
 - `docker-publish` (push backend/frontend образов в GHCR)
 
 CD job (локально):
-- `deploy-minikube` (runs-on `[self-hosted, windows]`)
-- деплой в локальный Minikube и smoke-тест API
+- `deploy-minikube` (runs-on `[self-hosted, macOS, minikube-local]`)
+- деплой в локальный Minikube из GHCR-образов, повторный idempotent redeploy, smoke-тест, observability check и HPA validation
+
+Локальный GitHub Actions runner:
+```bash
+./scripts/configure_github_runner.sh
+./scripts/start_github_runner.sh
+```
 
 ## API
 Базовый URL: `http://localhost:8080`
