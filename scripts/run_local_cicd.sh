@@ -24,7 +24,14 @@ FRONTEND_SHA_IMAGE="${FRONTEND_SHA_IMAGE:-ghcr.io/${REPO_LC}/frontend:${GITHUB_S
 FRONTEND_NGINX_IMAGE="${FRONTEND_NGINX_IMAGE:-nginx:1.25-alpine}"
 
 should_run() {
-  [[ "${1}" == "1" ]]
+  case "${1}" in
+    1|true|TRUE|yes|YES|on|ON)
+      return 0
+      ;;
+    *)
+      return 1
+      ;;
+  esac
 }
 
 ensure_runner_toolchain() {
