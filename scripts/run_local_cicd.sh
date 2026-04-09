@@ -34,6 +34,13 @@ should_run() {
   esac
 }
 
+skip_step() {
+  local step_name="$1"
+  local reason="$2"
+
+  echo "Skipping ${step_name}: ${reason}."
+}
+
 ensure_runner_toolchain() {
   local cmd
 
@@ -54,7 +61,7 @@ print_versions() {
 
 validate_backend() {
   if ! should_run "${RUN_BACKEND}"; then
-    echo "Skipping backend validation."
+    skip_step "backend validation" "RUN_BACKEND=${RUN_BACKEND}"
     return 0
   fi
 
@@ -73,7 +80,7 @@ validate_backend() {
 
 validate_frontend() {
   if ! should_run "${RUN_FRONTEND}"; then
-    echo "Skipping frontend validation."
+    skip_step "frontend validation" "RUN_FRONTEND=${RUN_FRONTEND}"
     return 0
   fi
 
@@ -94,7 +101,7 @@ validate_frontend() {
 
 build_backend_image() {
   if ! should_run "${RUN_BACKEND}"; then
-    echo "Skipping backend image build."
+    skip_step "backend image build" "RUN_BACKEND=${RUN_BACKEND}"
     return 0
   fi
 
@@ -110,7 +117,7 @@ build_backend_image() {
 
 build_frontend_image() {
   if ! should_run "${RUN_FRONTEND}"; then
-    echo "Skipping frontend image build."
+    skip_step "frontend image build" "RUN_FRONTEND=${RUN_FRONTEND}"
     return 0
   fi
 
@@ -125,8 +132,13 @@ build_frontend_image() {
 }
 
 push_backend_image() {
-  if ! should_run "${RUN_BACKEND}" || ! should_run "${RUN_PUBLISH}"; then
-    echo "Skipping backend image push."
+  if ! should_run "${RUN_BACKEND}"; then
+    skip_step "backend image push" "RUN_BACKEND=${RUN_BACKEND}"
+    return 0
+  fi
+
+  if ! should_run "${RUN_PUBLISH}"; then
+    skip_step "backend image push" "RUN_PUBLISH=${RUN_PUBLISH}"
     return 0
   fi
 
@@ -136,8 +148,13 @@ push_backend_image() {
 }
 
 push_frontend_image() {
-  if ! should_run "${RUN_FRONTEND}" || ! should_run "${RUN_PUBLISH}"; then
-    echo "Skipping frontend image push."
+  if ! should_run "${RUN_FRONTEND}"; then
+    skip_step "frontend image push" "RUN_FRONTEND=${RUN_FRONTEND}"
+    return 0
+  fi
+
+  if ! should_run "${RUN_PUBLISH}"; then
+    skip_step "frontend image push" "RUN_PUBLISH=${RUN_PUBLISH}"
     return 0
   fi
 
@@ -152,7 +169,7 @@ deploy_minikube() {
   local smoke_test_flag="1"
 
   if ! should_run "${RUN_DEPLOY}"; then
-    echo "Skipping minikube deploy."
+    skip_step "minikube deploy" "RUN_DEPLOY=${RUN_DEPLOY}"
     return 0
   fi
 
@@ -191,8 +208,13 @@ deploy_minikube() {
 }
 
 verify_observability() {
-  if ! should_run "${RUN_DEPLOY}" || ! should_run "${RUN_OBSERVABILITY_VERIFY}"; then
-    echo "Skipping observability verification."
+  if ! should_run "${RUN_DEPLOY}"; then
+    skip_step "observability verification" "RUN_DEPLOY=${RUN_DEPLOY}"
+    return 0
+  fi
+
+  if ! should_run "${RUN_OBSERVABILITY_VERIFY}"; then
+    skip_step "observability verification" "RUN_OBSERVABILITY_VERIFY=${RUN_OBSERVABILITY_VERIFY}"
     return 0
   fi
 
@@ -201,8 +223,13 @@ verify_observability() {
 }
 
 verify_hpa() {
-  if ! should_run "${RUN_DEPLOY}" || ! should_run "${RUN_HPA_VALIDATION}"; then
-    echo "Skipping HPA validation."
+  if ! should_run "${RUN_DEPLOY}"; then
+    skip_step "HPA validation" "RUN_DEPLOY=${RUN_DEPLOY}"
+    return 0
+  fi
+
+  if ! should_run "${RUN_HPA_VALIDATION}"; then
+    skip_step "HPA validation" "RUN_HPA_VALIDATION=${RUN_HPA_VALIDATION}"
     return 0
   fi
 
@@ -241,7 +268,7 @@ main() {
     push_backend_image
     push_frontend_image
   else
-    echo "Skipping Docker image build/publish."
+    skip_step "Docker image build/publish" "RUN_DEPLOY=${RUN_DEPLOY}, RUN_PUBLISH=${RUN_PUBLISH}"
   fi
 
   deploy_minikube
