@@ -17,6 +17,7 @@ BACKEND_IMAGE="${BACKEND_IMAGE:-ghcr.io/discipliny/dev_ops/backend:latest}"
 FRONTEND_IMAGE="${FRONTEND_IMAGE:-ghcr.io/discipliny/dev_ops/frontend:latest}"
 PROMETHEUS_IMAGE="${PROMETHEUS_IMAGE:-quay.io/prometheus/prometheus:v2.54.1}"
 GRAFANA_IMAGE="${GRAFANA_IMAGE:-docker.io/grafana/grafana-oss:11.2.2}"
+KUBE_STATE_METRICS_IMAGE="${KUBE_STATE_METRICS_IMAGE:-registry.k8s.io/kube-state-metrics/kube-state-metrics:v2.13.0}"
 METRICS_SERVER_IMAGE="${METRICS_SERVER_IMAGE:-registry.k8s.io/metrics-server/metrics-server:v0.8.1}"
 PROMETHEUS_RELEASE_VERSION="${PROMETHEUS_RELEASE_VERSION:-2.54.1}"
 GRAFANA_RELEASE_VERSION="${GRAFANA_RELEASE_VERSION:-11.2.2}"
@@ -62,6 +63,7 @@ fi
 load_image_into_minikube "${METRICS_SERVER_IMAGE}"
 load_image_into_minikube "${PROMETHEUS_IMAGE}"
 load_image_into_minikube "${GRAFANA_IMAGE}"
+load_image_into_minikube "${KUBE_STATE_METRICS_IMAGE}"
 
 echo "Enabling metrics-server addon..."
 minikube addons enable metrics-server >/dev/null
@@ -75,6 +77,7 @@ wait_for_metrics_api
 
 echo "Applying monitoring manifests..."
 apply_monitoring_manifest
+kubectl -n "${MONITORING_NAMESPACE}" rollout status deployment/kube-state-metrics --timeout=300s
 kubectl -n "${MONITORING_NAMESPACE}" rollout status deployment/prometheus --timeout=300s
 kubectl -n "${MONITORING_NAMESPACE}" rollout status deployment/grafana --timeout=300s
 

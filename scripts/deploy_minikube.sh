@@ -27,6 +27,7 @@ POSTGRES_IMAGE="${POSTGRES_IMAGE:-postgres:16-alpine}"
 METRICS_SERVER_IMAGE="${METRICS_SERVER_IMAGE:-registry.k8s.io/metrics-server/metrics-server:v0.8.1}"
 PROMETHEUS_IMAGE="${PROMETHEUS_IMAGE:-quay.io/prometheus/prometheus:v2.54.1}"
 GRAFANA_IMAGE="${GRAFANA_IMAGE:-docker.io/grafana/grafana-oss:11.2.2}"
+KUBE_STATE_METRICS_IMAGE="${KUBE_STATE_METRICS_IMAGE:-registry.k8s.io/kube-state-metrics/kube-state-metrics:v2.13.0}"
 LOADGEN_IMAGE="${LOADGEN_IMAGE:-busybox:1.36}"
 FRONTEND_NGINX_IMAGE="${FRONTEND_NGINX_IMAGE:-nginx:1.25-alpine}"
 PROMETHEUS_RELEASE_VERSION="${PROMETHEUS_RELEASE_VERSION:-2.54.1}"
@@ -146,6 +147,13 @@ build_and_load_local_images() {
   FRONTEND_IMAGE="${LOCAL_FRONTEND_IMAGE}"
 }
 
+ensure_runtime_images_available() {
+  load_image_into_minikube "${BACKEND_IMAGE}"
+  load_image_into_minikube "${FRONTEND_IMAGE}"
+  load_image_into_minikube "${POSTGRES_IMAGE}"
+  load_image_into_minikube "${INIT_POSTGRES_IMAGE}"
+}
+
 ensure_metrics_server() {
   load_image_into_minikube "${METRICS_SERVER_IMAGE}"
 
@@ -201,8 +209,8 @@ apply_application_manifests() {
 
   apply_template_manifest "${K8S_DIR}/backend.yaml"
   apply_template_manifest "${K8S_DIR}/frontend.yaml"
-  kubectl apply -f "${K8S_DIR}/backend-hpa.yaml"
-  kubectl apply -f "${K8S_DIR}/frontend-hpa.yaml"
+  kubectl_apply_if_changed "${K8S_DIR}/backend-hpa.yaml" "${K8S_DIR}/backend-hpa.yaml"
+  kubectl_apply_if_changed "${K8S_DIR}/frontend-hpa.yaml" "${K8S_DIR}/frontend-hpa.yaml"
 
   kubectl -n "${NAMESPACE}" rollout status deployment/backend --timeout=300s
   kubectl -n "${NAMESPACE}" rollout status deployment/frontend --timeout=300s
@@ -253,6 +261,8 @@ ensure_minikube_running "${AUTO_START_MINIKUBE}" "${MINIKUBE_DRIVER}" "${MINIKUB
 
 if [[ "${BUILD_LOCAL}" == "1" ]]; then
   build_and_load_local_images
+else
+  ensure_runtime_images_available
 fi
 
 prepare_observability_images

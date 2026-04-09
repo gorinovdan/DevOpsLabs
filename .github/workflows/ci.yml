@@ -11,6 +11,12 @@ on:
       - "**/*.md"
       - "docs/**"
   workflow_dispatch:
+    inputs:
+      run_hpa_validation:
+        description: "Run backend HPA load validation after deploy"
+        required: false
+        default: true
+        type: boolean
 
 permissions:
   contents: read
@@ -264,7 +270,7 @@ jobs:
           cache-to: type=gha,mode=max,scope=frontend-image
 
   deploy-minikube:
-    runs-on: [self-hosted, windows]
+    runs-on: [self-hosted, macOS, minikube-local]
     if: github.event_name != 'pull_request' && (github.event_name == 'workflow_dispatch' || needs.changes.outputs.backend == 'true' || needs.changes.outputs.frontend == 'true' || needs.changes.outputs.infra == 'true' || needs.changes.outputs.ci == 'true')
     needs: [changes, docker-publish]
     permissions:
@@ -277,58 +283,82 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Ensure required tools on runner
-        shell: pwsh
+        shell: bash
         run: |
-          $ErrorActionPreference = 'Stop'
-          foreach ($cmd in @('docker', 'kubectl', 'minikube', 'helm')) {
-            if (-not (Get-Command $cmd -ErrorAction SilentlyContinue)) {
-              throw "Required command not found on self-hosted runner: $cmd"
-            }
-          }
-
-      - name: Start minikube if needed
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = 'Stop'
-          minikube status *> $null
-          if ($LASTEXITCODE -ne 0) {
-            minikube start --driver=docker
-          }
+          set -euo pipefail
+          chmod +x scripts/*.sh
+          for cmd in docker kubectl minikube curl tar python3 bash; do
+            if ! command -v "$cmd" >/dev/null 2>&1; then
+              echo "Required command not found on self-hosted runner: $cmd" >&2
+              exit 1
+            fi
+          done
 
       - name: Login to GHCR
-        shell: pwsh
+        shell: bash
         env:
           GHCR_USER: ${{ github.actor }}
           GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          $ErrorActionPreference = 'Stop'
-          $env:GHCR_TOKEN | docker login ghcr.io --username $env:GHCR_USER --password-stdin
+          set -euo pipefail
+          printf '%s' "${GHCR_TOKEN}" | docker login ghcr.io --username "${GHCR_USER}" --password-stdin
 
       - name: Deploy to local Minikube
-        shell: pwsh
+        shell: bash
         env:
           BACKEND_IMAGE: ${{ needs.docker-publish.outputs.backend_image }}
           FRONTEND_IMAGE: ${{ needs.docker-publish.outputs.frontend_image }}
+          AUTO_START_MINIKUBE: "1"
+          BUILD_LOCAL: "0"
+          BUILD_OBSERVABILITY_LOCAL: "1"
+          ENABLE_OBSERVABILITY: "1"
+          ENABLE_PORT_FORWARD: "0"
+          RUN_SMOKE_TEST: "1"
         run: |
-          $ErrorActionPreference = 'Stop'
-          if (-not $env:BACKEND_IMAGE -or -not $env:FRONTEND_IMAGE) {
-            throw 'Image outputs are empty. Check docker-publish job outputs.'
-          }
-          .\scripts\deploy_minikube.ps1 -BackendImage $env:BACKEND_IMAGE -FrontendImage $env:FRONTEND_IMAGE
+          set -euo pipefail
+          if [[ -z "${BACKEND_IMAGE}" || -z "${FRONTEND_IMAGE}" ]]; then
+            echo "Image outputs are empty. Check docker-publish job outputs." >&2
+            exit 1
+          fi
+          ./scripts/deploy_minikube.sh
 
-      - name: Smoke test deployed app
-        shell: pwsh
+      - name: Verify idempotent redeploy
+        shell: bash
+        env:
+          BACKEND_IMAGE: ${{ needs.docker-publish.outputs.backend_image }}
+          FRONTEND_IMAGE: ${{ needs.docker-publish.outputs.frontend_image }}
+          AUTO_START_MINIKUBE: "1"
+          BUILD_LOCAL: "0"
+          BUILD_OBSERVABILITY_LOCAL: "1"
+          ENABLE_OBSERVABILITY: "1"
+          ENABLE_PORT_FORWARD: "0"
+          RUN_SMOKE_TEST: "1"
         run: |
-          $ErrorActionPreference = 'Stop'
-          $frontendUrl = (minikube service frontend -n flowboard --url | Select-Object -First 1).Trim()
-          if (-not $frontendUrl) {
-            throw 'Cannot resolve frontend URL from minikube service.'
-          }
+          set -euo pipefail
+          if [[ -z "${BACKEND_IMAGE}" || -z "${FRONTEND_IMAGE}" ]]; then
+            echo "Image outputs are empty. Check docker-publish job outputs." >&2
+            exit 1
+          fi
+          ./scripts/deploy_minikube.sh
 
-          $insights = Invoke-WebRequest -UseBasicParsing -TimeoutSec 20 -Uri "$frontendUrl/api/insights"
-          $tasks = Invoke-WebRequest -UseBasicParsing -TimeoutSec 20 -Uri "$frontendUrl/api/tasks"
-          if ($insights.StatusCode -ne 200 -or $tasks.StatusCode -ne 200) {
-            throw "Smoke test failed. insights=$($insights.StatusCode), tasks=$($tasks.StatusCode)"
-          }
+      - name: Verify observability stack
+        shell: bash
+        run: |
+          set -euo pipefail
+          ./scripts/verify_observability_minikube.sh
 
+      - name: Validate backend HPA scaling
+        if: github.event_name != 'workflow_dispatch' || inputs.run_hpa_validation
+        shell: bash
+        run: |
+          set -euo pipefail
+          ./scripts/load_test_backend_hpa.sh
 
+      - name: Print deployed resources
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          kubectl -n flowboard get pods,svc,hpa
+          echo "---"
+          kubectl -n monitoring get pods,svc

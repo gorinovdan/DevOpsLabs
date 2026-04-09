@@ -35,11 +35,13 @@ require_cmd kubectl
 require_cmd curl
 
 if [[ -z "${FRONTEND_URL}" ]]; then
-  rm -f "${PORT_FORWARD_LOG}"
-  kubectl -n "${NAMESPACE}" port-forward service/frontend "${PORT_FORWARD_PORT}:80" >"${PORT_FORWARD_LOG}" 2>&1 &
-  PORT_FORWARD_PID=$!
-  trap cleanup EXIT
   FRONTEND_URL="http://127.0.0.1:${PORT_FORWARD_PORT}"
+  if ! curl -fsS "${FRONTEND_URL}/" >/dev/null 2>&1; then
+    rm -f "${PORT_FORWARD_LOG}"
+    kubectl -n "${NAMESPACE}" port-forward service/frontend "${PORT_FORWARD_PORT}:80" >"${PORT_FORWARD_LOG}" 2>&1 &
+    PORT_FORWARD_PID=$!
+    trap cleanup EXIT
+  fi
 fi
 
 if [[ -z "${FRONTEND_URL}" ]]; then
