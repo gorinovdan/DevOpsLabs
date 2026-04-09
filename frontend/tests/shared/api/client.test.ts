@@ -25,6 +25,17 @@ describe("client", () => {
     );
   });
 
+  it("uses same-origin relative paths by default", async () => {
+    (global.fetch as ReturnType<typeof vi.fn>).mockResolvedValueOnce(response({ ok: true }));
+
+    await request<{ ok: boolean }>("/api/tasks");
+
+    expect(global.fetch).toHaveBeenCalledWith(
+      "/api/tasks",
+      expect.objectContaining({ headers: { "Content-Type": "application/json" } })
+    );
+  });
+
   it("returns undefined for 204 responses", async () => {
     (global.fetch as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
       ok: true,
