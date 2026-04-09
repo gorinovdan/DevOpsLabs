@@ -63,6 +63,16 @@ powershell -ExecutionPolicy Bypass -File .\scripts\tf_vm.ps1 -Action apply -Auto
 ./scripts/deploy_minikube_local.sh
 ```
 
+Полная остановка локального стенда:
+```bash
+./scripts/stop_minikube_local.sh
+```
+
+Полное удаление кластера:
+```bash
+MINIKUBE_ACTION=delete PURGE=1 ./scripts/stop_minikube_local.sh
+```
+
 HPA-проверка вынесена в opt-in шаг, потому что она специально меняет runtime-состояние:
 ```bash
 RUN_HPA_VALIDATION=1 ./scripts/deploy_minikube_local.sh
