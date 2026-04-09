@@ -427,6 +427,22 @@ wait_for_local_port() {
   return 1
 }
 
+wait_for_http_endpoint() {
+  local url="$1"
+  local attempts="${2:-30}"
+
+  require_cmd curl
+
+  for _ in $(seq 1 "${attempts}"); do
+    if curl -fsS --max-time 5 "${url}" >/dev/null 2>&1; then
+      return 0
+    fi
+    sleep 1
+  done
+
+  return 1
+}
+
 find_listener_pid() {
   local port="$1"
 
@@ -493,21 +509,28 @@ ensure_port_forward() {
   local service="$3"
   local local_port="$4"
   local remote_port="$5"
+  local health_path="${6:-}"
   local state_dir="${TMPDIR:-/tmp}/flowboard-port-forwards"
   local pid_file="${state_dir}/${name}.pid"
   local log_file="${state_dir}/${name}.log"
   local existing_pid=""
   local listener_pid=""
   local listener_cmd=""
+  local health_url=""
 
   mkdir -p "${state_dir}"
+  if [[ -n "${health_path}" ]]; then
+    health_url="http://127.0.0.1:${local_port}${health_path}"
+  fi
 
   if [[ -f "${pid_file}" ]]; then
     existing_pid="$(cat "${pid_file}" 2>/dev/null || true)"
     if [[ -n "${existing_pid}" ]] && kill -0 "${existing_pid}" 2>/dev/null; then
       if wait_for_local_port "${local_port}" 127.0.0.1 1; then
-        echo "Reusing port-forward ${name}: http://127.0.0.1:${local_port}"
-        return 0
+        if [[ -z "${health_url}" ]] || wait_for_http_endpoint "${health_url}" 2; then
+          echo "Reusing port-forward ${name}: http://127.0.0.1:${local_port}"
+          return 0
+        fi
       fi
       kill "${existing_pid}" >/dev/null 2>&1 || true
       sleep 1
@@ -519,9 +542,14 @@ ensure_port_forward() {
   if [[ -n "${listener_pid}" ]]; then
     listener_cmd="$(ps -p "${listener_pid}" -o command= 2>/dev/null || true)"
     if [[ "${listener_cmd}" == *"kubectl"* && "${listener_cmd}" == *"port-forward"* && "${listener_cmd}" == *"service/${service}"* && "${listener_cmd}" == *"${local_port}:${remote_port}"* ]]; then
-      echo "${listener_pid}" > "${pid_file}"
-      echo "Reusing port-forward ${name}: http://127.0.0.1:${local_port}"
-      return 0
+      if [[ -z "${health_url}" ]] || wait_for_http_endpoint "${health_url}" 2; then
+        echo "${listener_pid}" > "${pid_file}"
+        echo "Reusing port-forward ${name}: http://127.0.0.1:${local_port}"
+        return 0
+      fi
+
+      terminate_pid "${listener_pid}"
+      sleep 1
     fi
 
     echo "Error: local port ${local_port} is already in use by another process: ${listener_cmd}" >&2
@@ -534,7 +562,7 @@ ensure_port_forward() {
     kubectl -n "${namespace}" port-forward "service/${service}" "${local_port}:${remote_port}" --address 127.0.0.1 \
     > "${pid_file}"
 
-  if wait_for_local_port "${local_port}" 127.0.0.1 30; then
+  if wait_for_local_port "${local_port}" 127.0.0.1 30 && { [[ -z "${health_url}" ]] || wait_for_http_endpoint "${health_url}" 30; }; then
     return 0
   fi
 
