@@ -210,8 +210,8 @@ jobs:
       RUN_BACKEND_IMAGE: ${{ github.event_name == 'workflow_dispatch' || needs.changes.outputs.backend == 'true' || needs.changes.outputs.ci == 'true' }}
       RUN_FRONTEND_IMAGE: ${{ github.event_name == 'workflow_dispatch' || needs.changes.outputs.frontend == 'true' || needs.changes.outputs.ci == 'true' }}
     outputs:
-      backend_image: ${{ steps.meta.outputs.backend_image }}
-      frontend_image: ${{ steps.meta.outputs.frontend_image }}
+      backend_image: ${{ steps.meta.outputs.backend_image_sha }}
+      frontend_image: ${{ steps.meta.outputs.frontend_image_sha }}
     steps:
       - uses: actions/checkout@v4
         if: env.RUN_BACKEND_IMAGE == 'true' || env.RUN_FRONTEND_IMAGE == 'true'
