@@ -1,20 +1,31 @@
-# Лабораторная работа №3 (Minikube, HPA, Prometheus, Grafana)
+# Лабораторная работа №3
 
-## 1. Что сделано
-- приложение `FlowBoard` из `LAB1` и контейнеризация из `LAB2` продолжены до локального Kubernetes-сценария;
-- backend и frontend разворачиваются в `minikube`, PostgreSQL работает внутри кластера;
-- backend масштабируется через `HorizontalPodAutoscaler` по CPU с целевым порогом `15%`;
+## Тема
+Локальное развёртывание `FlowBoard` в `Minikube` с `HPA`, `Prometheus`, `Grafana` и idempotent `CI/CD` через `GitHub Actions` + self-hosted runner.
+
+## 1. Что реализовано
+- приложение из `LAB1` и контейнеризация из `LAB2` продолжены до Kubernetes-сценария;
+- backend, frontend и PostgreSQL разворачиваются в namespace `flowboard`;
+- backend масштабируется через `HorizontalPodAutoscaler` по CPU с target `15%`;
 - backend экспортирует Prometheus-метрики на `/metrics`;
-- добавлены bash-скрипты для полного локального цикла: deploy, smoke, HPA load test, observability.
+- локально разворачиваются `Prometheus`, `Grafana`, `kube-state-metrics`;
+- весь цикл `build/test/publish/deploy/update/verify` выполняется bash-скриптами и используется из `GitHub Actions`;
+- после deploy автоматически поднимаются локальные `port-forward`:
+  - `http://127.0.0.1:18081` - frontend
+  - `http://127.0.0.1:18080/health` - backend
+  - `http://127.0.0.1:13000` - Grafana
+  - `http://127.0.0.1:19090` - Prometheus
 
-## 2. Новые bash-скрипты
-- `scripts/deploy_minikube.sh` - основной idempotent deploy в `minikube`;
-- `scripts/deploy_minikube_local.sh` - единый локальный entrypoint `build -> deploy -> observability -> smoke`;
-- `scripts/stop_minikube_local.sh` - полная остановка локального стенда и `port-forward`;
-- `scripts/smoke_test_minikube.sh` - проверка CRUD через frontend reverse proxy;
-- `scripts/load_test_backend_hpa.sh` - отдельная нагрузка на backend для проверки HPA;
-- `scripts/enable_observability_minikube.sh` - установка `Prometheus + Grafana + kube-state-metrics` в namespace `monitoring`;
-- `scripts/verify_observability_minikube.sh` - проверка Grafana, Prometheus, dashboard provisioning и scrape-метрик.
+## 2. Основные bash-скрипты
+- `scripts/deploy_minikube.sh` - основной idempotent deploy/update в `minikube`;
+- `scripts/deploy_minikube_local.sh` - локальный entrypoint для полного сценария `build -> deploy -> observability -> smoke`;
+- `scripts/run_local_cicd.sh` - локальная реализация pipeline, которую вызывает self-hosted GitHub runner;
+- `scripts/enable_observability_minikube.sh` - установка и обновление `Prometheus + Grafana + kube-state-metrics`;
+- `scripts/verify_observability_minikube.sh` - проверка health, dashboard provisioning и scrape targets;
+- `scripts/smoke_test_minikube.sh` - smoke CRUD через frontend reverse proxy;
+- `scripts/load_test_backend_hpa.sh` - нагрузочный тест backend для проверки HPA;
+- `scripts/stop_minikube_local.sh` - остановка `port-forward` и `minikube`;
+- `scripts/configure_github_runner.sh` и `scripts/start_github_runner.sh` - настройка и запуск локального GitHub Actions runner.
 
 ## 3. Локальный deploy
 Полный локальный прогон:
@@ -23,56 +34,57 @@
 ./scripts/deploy_minikube_local.sh
 ```
 
-По умолчанию `deploy_minikube_local.sh`:
+Этот entrypoint по умолчанию:
 - поднимает `minikube`, если он ещё не запущен;
-- собирает backend локально через host `go`, а frontend через host `npm`;
-- упаковывает runtime-образы с content-hash тегами вида `flowboard-backend:local-<hash>` и `flowboard-frontend:local-<hash>`;
+- собирает backend и frontend локально host-toolchain'ом;
+- собирает runtime-образы с локальными hash-тегами;
 - загружает их в `minikube`;
-- применяет манифесты из `deploy/k8s`;
-- поднимает `metrics-server`, `Prometheus`, `Grafana`, `kube-state-metrics`;
+- включает `metrics-server`;
+- разворачивает monitoring stack;
+- применяет манифесты приложения;
+- поднимает локальные `port-forward`;
 - запускает smoke-тест.
 
-Для сценария LAB3 из Docker-образов LAB2/CI используется основной bash-скрипт:
+Если нужно развернуть не локально собранные образы, а уже опубликованные Docker-образы из `LAB2`/`CI`, используется основной deploy-скрипт:
 
 ```bash
 BUILD_LOCAL=0 \
-BACKEND_IMAGE=ghcr.io/<owner>/<repo>/backend:latest \
-FRONTEND_IMAGE=ghcr.io/<owner>/<repo>/frontend:latest \
+BACKEND_IMAGE=ghcr.io/<owner>/<repo>/backend:<tag> \
+FRONTEND_IMAGE=ghcr.io/<owner>/<repo>/frontend:<tag> \
 RUN_SMOKE_TEST=1 \
+ENABLE_PORT_FORWARD=1 \
 ./scripts/deploy_minikube.sh
 ```
 
-Именно этот путь использует self-hosted GitHub runner при локальном CD.
+`deploy_minikube.sh` работает идемпотентно:
+- неизменные манифесты не переапплаиваются без необходимости;
+- уже загруженные образы не грузятся повторно;
+- существующие `port-forward` переиспользуются;
+- повторный запуск теми же параметрами выполняет корректный update без ручного вмешательства.
 
-Сценарий идемпотентный:
-- повторный запуск с тем же исходным кодом не пересобирает backend/frontend образы заново;
-- повторный запуск повторно применяет те же манифесты через `kubectl apply`;
-- HPA-нагрузка не запускается по умолчанию, потому что она сознательно меняет runtime-состояние и вынесена в отдельный шаг.
-
-Более короткий повторный deploy без пересборки:
+Повторный deploy тем же entrypoint:
 
 ```bash
-BUILD_LOCAL=0 \
-RUN_SMOKE_TEST=1 \
-./scripts/deploy_minikube.sh
+./scripts/deploy_minikube_local.sh
 ```
 
-## 4. Smoke и доступ
-Smoke-тест идёт через `kubectl port-forward`, поэтому не зависит от особенностей `minikube` driver на macOS:
+## 4. Доступ к приложению
+При `ENABLE_PORT_FORWARD=1` проброс портов делается автоматически самим deploy-скриптом.
+
+Проверка:
+
+```bash
+curl -fsS http://127.0.0.1:18081 >/dev/null
+curl -fsS http://127.0.0.1:18080/health
+curl -fsS http://127.0.0.1:13000/api/health
+curl -fsS http://127.0.0.1:19090/-/healthy
+```
+
+Smoke-тест:
 
 ```bash
 ./scripts/smoke_test_minikube.sh
 ```
-
-Ручной доступ:
-
-```bash
-kubectl -n flowboard port-forward svc/frontend 18081:80
-kubectl -n flowboard port-forward svc/backend 18080:8080
-```
-
-- Frontend: `http://127.0.0.1:18081`
-- Backend: `http://127.0.0.1:18080`
 
 Остановка локального стенда:
 
@@ -80,65 +92,67 @@ kubectl -n flowboard port-forward svc/backend 18080:8080
 ./scripts/stop_minikube_local.sh
 ```
 
-Полное удаление кластера вместо остановки:
+Полное удаление кластера:
 
 ```bash
 MINIKUBE_ACTION=delete PURGE=1 ./scripts/stop_minikube_local.sh
 ```
 
 ## 5. HPA
-Манифест: `deploy/k8s/backend-hpa.yaml`
+Манифест backend HPA:
 
+```text
+deploy/k8s/backend-hpa.yaml
+```
+
+Параметры:
 - `minReplicas: 1`
 - `maxReplicas: 5`
 - `averageUtilization: 15`
 
-Проверка:
+Проверка HPA:
 
 ```bash
 kubectl -n flowboard get hpa
 ./scripts/load_test_backend_hpa.sh
 ```
 
-Если нужен именно полный deploy со встроенной HPA-проверкой, она включается явно:
+Во время проверки backend получает нагрузку, и `backend-hpa` увеличивает число pod'ов выше `1`, если средняя CPU-утилизация превышает target `15%`.
+
+Если нужен встроенный HPA-тест сразу после deploy:
 
 ```bash
 RUN_HPA_VALIDATION=1 ./scripts/deploy_minikube_local.sh
 ```
 
+В `CI/CD` HPA-проверка по умолчанию отключена и включается вручную через `workflow_dispatch`, чтобы не тормозить каждый обычный прогон.
+
 ## 6. Monitoring
-Backend экспортирует Prometheus-метрики на `/metrics`.
-Prometheus, Grafana и `kube-state-metrics` разворачиваются прямым манифестом:
+Monitoring stack описан в:
 
 ```text
 deploy/k8s/monitoring.yaml
 ```
 
-Установка observability:
+Установка отдельно:
 
 ```bash
 ./scripts/enable_observability_minikube.sh
 ```
 
-Доступ после установки:
-
-```bash
-kubectl -n monitoring port-forward svc/grafana 13000:80
-kubectl -n monitoring port-forward svc/prometheus 19090:9090
-```
-
+После deploy доступны:
 - Grafana: `http://127.0.0.1:13000`
 - Prometheus: `http://127.0.0.1:19090`
 
-Что показывает Grafana dashboard `FlowBoard Overview`:
-- запросы по backend pod’ам;
-- inflight-запросы по backend pod’ам;
+Dashboard `FlowBoard Overview` показывает:
+- HTTP requests по backend pod'ам;
+- inflight requests по backend pod'ам;
 - latency по маршрутам;
-- readiness backend pod’ов;
+- readiness backend pod'ов;
 - current/desired replicas у `backend-hpa`;
 - desired/available replicas у backend deployment.
 
-Отдельная проверка observability:
+Проверка observability:
 
 ```bash
 ./scripts/verify_observability_minikube.sh
@@ -148,45 +162,94 @@ kubectl -n monitoring port-forward svc/prometheus 19090:9090
 - `Grafana /api/health`;
 - наличие dashboard `flowboard-overview`;
 - `Prometheus /-/healthy`;
-- scrape backend pod’ов;
+- scrape backend pod'ов;
 - scrape `kube-state-metrics`;
-- наличие application и Kubernetes state metrics для dashboard.
+- наличие application и Kubernetes state metrics, нужных dashboard'у.
 
 ## 7. CI/CD
-Workflow: `.github/workflows/ci.yml`
+Workflow:
 
-Структура:
-- `backend-build`
-- `backend-test`
-- `frontend-build`
-- `frontend-test`
-- `docker-publish` - отдельный job для публикации backend/frontend Docker-образов в GHCR;
-- `deploy-minikube` - self-hosted macOS runner с label `minikube-local`, локальный deploy в `minikube` из опубликованных GHCR-образов.
+```text
+.github/workflows/ci.yml
+```
 
-`deploy-minikube` делает:
-- deploy в `minikube` через `scripts/deploy_minikube.sh`;
-- повторный deploy тем же скриптом для проверки идемпотентности update-сценария;
-- smoke-тест;
-- `verify_observability_minikube.sh`;
-- `load_test_backend_hpa.sh`.
+Текущая структура workflow:
+- `changes` - быстрый job на `ubuntu-latest`, который определяет, что реально изменилось;
+- `local-cicd` - основной self-hosted job на локальном runner с labels `[self-hosted, macOS, minikube-local]`.
 
-Подготовка локального GitHub Actions runner:
+`local-cicd` не гоняет несколько отдельных job'ов для backend/frontend, а запускает единый локальный pipeline:
+
+```text
+scripts/run_local_cicd.sh
+```
+
+Этот pipeline:
+- проверяет backend и frontend только если это нужно по changed paths или manual run;
+- локально собирает backend/frontend runtime images;
+- пушит образы в `GHCR` отдельным publish-этапом;
+- деплоит в локальный `minikube` из `GHCR` образов с SHA-tag;
+- выполняет повторный deploy тем же скриптом для проверки идемпотентности;
+- проверяет smoke;
+- проверяет observability;
+- при ручном запуске может дополнительно прогнать HPA validation.
+
+По умолчанию в workflow включён автопроброс портов:
+
+```text
+ENABLE_PORT_FORWARD=1
+```
+
+Поэтому после успешного `local-cicd` run локально остаются доступны:
+- `http://127.0.0.1:18081`
+- `http://127.0.0.1:18080/health`
+- `http://127.0.0.1:13000`
+- `http://127.0.0.1:19090`
+
+Для self-hosted runner'а исправлен важный нюанс: detached `kubectl port-forward` запускаются без `RUNNER_TRACKING_ID`, поэтому GitHub Actions не убивает их после завершения job.
+
+Подготовка локального runner:
 
 ```bash
 ./scripts/configure_github_runner.sh
 ./scripts/start_github_runner.sh
 ```
 
-## 8. Что проверено локально
+Полный ручной запуск workflow с HPA:
+
+```bash
+gh workflow run "CI/CD" -f run_hpa_validation=true
+```
+
+## 8. Что проверено
 - `go test ./...` в `backend` проходит;
 - `npm test` и `npm run build` в `frontend` проходят;
-- локальный `minikube` deploy одним entrypoint проходит;
+- локальный deploy одним скриптом проходит;
+- повторный idempotent redeploy проходит;
 - smoke-тест CRUD через frontend reverse proxy проходит;
-- HPA-проверка масштабирует backend выше `1` pod при target `15%`;
-- Grafana и Prometheus реально поднимаются и отдают health endpoints;
-- Prometheus видит backend pod’ы и `kube-state-metrics`;
+- HPA увеличивает число backend pod'ов при нагрузке;
+- `Prometheus`, `Grafana`, `kube-state-metrics` поднимаются и проходят health-check;
 - dashboard provisioning в Grafana проходит автоматически;
-- повторный deploy проходит без ручного вмешательства и без конфликтов по уже существующим ресурсам.
+- self-hosted GitHub Actions runner выполняет полный deploy/update в `minikube`;
+- после завершения GitHub Actions локальные порты `18081` и `18080` остаются подняты.
 
-## 9. Важное замечание
-На полностью холодной машине самые долгие шаги - не манифесты приложения, а докачка системных образов `minikube`, `metrics-server`, `Prometheus/Grafana`. Если локальный Docker/Minikube кэш пустой, первый прогон observability может занять заметно больше времени, чем сам deploy приложения.
+## 9. Итог по требованиям LAB3
+Требование 2 выполнено:
+- `Minikube` поднимается локально;
+- приложение запускается в Kubernetes из Docker-образов, подготовленных в `LAB2` или опубликованных через `CI`.
+
+Требование 3 выполнено:
+- backend масштабируется через `HPA`;
+- target по CPU выставлен на `15%`;
+- масштабирование проверяется нагрузочным bash-скриптом.
+
+Требование 4 выполнено:
+- `Prometheus` и `Grafana` развёрнуты;
+- backend отдаёт метрики на `/metrics`;
+- dashboard показывает состояние pod'ов, запросов и реплик.
+
+Требование 5 выполнено:
+- в `CI/CD` есть отдельный publish-этап в рамках `local-cicd`, который пушит Docker-образы в `GHCR`;
+- deploy использует уже опубликованные образы по SHA-tag.
+
+## 10. Замечание по первому прогону
+На полностью холодной машине самые долгие шаги - это не манифесты приложения, а загрузка системных образов `minikube`, `metrics-server`, `Prometheus`, `Grafana`, `kube-state-metrics`. После прогрева локального Docker/Minikube-кэша повторные deploy/update заметно быстрее.
