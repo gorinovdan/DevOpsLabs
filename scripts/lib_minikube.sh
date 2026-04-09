@@ -310,6 +310,25 @@ find_listener_pid() {
   fi
 }
 
+terminate_pid() {
+  local pid="$1"
+
+  if [[ -z "${pid}" ]] || ! kill -0 "${pid}" 2>/dev/null; then
+    return 0
+  fi
+
+  kill "${pid}" >/dev/null 2>&1 || true
+
+  for _ in $(seq 1 10); do
+    if ! kill -0 "${pid}" 2>/dev/null; then
+      return 0
+    fi
+    sleep 1
+  done
+
+  kill -9 "${pid}" >/dev/null 2>&1 || true
+}
+
 start_detached_command() {
   local log_file="$1"
   shift
@@ -390,4 +409,41 @@ ensure_port_forward() {
   echo "Error: failed to establish port-forward ${name}. Log:" >&2
   cat "${log_file}" >&2
   exit 1
+}
+
+stop_port_forward() {
+  local name="$1"
+  local namespace="$2"
+  local service="$3"
+  local local_port="$4"
+  local remote_port="$5"
+  local state_dir="${TMPDIR:-/tmp}/flowboard-port-forwards"
+  local pid_file="${state_dir}/${name}.pid"
+  local log_file="${state_dir}/${name}.log"
+  local pid=""
+  local listener_pid=""
+  local listener_cmd=""
+
+  if [[ -f "${pid_file}" ]]; then
+    pid="$(cat "${pid_file}" 2>/dev/null || true)"
+    terminate_pid "${pid}"
+    rm -f "${pid_file}"
+  fi
+
+  listener_pid="$(find_listener_pid "${local_port}" || true)"
+  if [[ -n "${listener_pid}" ]]; then
+    listener_cmd="$(ps -p "${listener_pid}" -o command= 2>/dev/null || true)"
+    if [[ "${listener_cmd}" == *"kubectl"* && "${listener_cmd}" == *"port-forward"* && "${listener_cmd}" == *"-n ${namespace}"* && "${listener_cmd}" == *"service/${service}"* && "${listener_cmd}" == *"${local_port}:${remote_port}"* ]]; then
+      terminate_pid "${listener_pid}"
+    fi
+  fi
+
+  rm -f "${log_file}"
+}
+
+stop_default_port_forwards() {
+  stop_port_forward "frontend" "flowboard" "frontend" 18081 80
+  stop_port_forward "backend" "flowboard" "backend" 18080 8080
+  stop_port_forward "grafana" "monitoring" "grafana" 13000 80
+  stop_port_forward "prometheus" "monitoring" "prometheus" 19090 9090
 }

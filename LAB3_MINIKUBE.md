@@ -10,6 +10,7 @@
 ## 2. Новые bash-скрипты
 - `scripts/deploy_minikube.sh` - основной idempotent deploy в `minikube`;
 - `scripts/deploy_minikube_local.sh` - единый локальный entrypoint `build -> deploy -> observability -> smoke`;
+- `scripts/stop_minikube_local.sh` - полная остановка локального стенда и `port-forward`;
 - `scripts/smoke_test_minikube.sh` - проверка CRUD через frontend reverse proxy;
 - `scripts/load_test_backend_hpa.sh` - отдельная нагрузка на backend для проверки HPA;
 - `scripts/enable_observability_minikube.sh` - установка `Prometheus + Grafana` в namespace `monitoring`.
@@ -59,6 +60,18 @@ kubectl -n flowboard port-forward svc/backend 18080:8080
 
 - Frontend: `http://127.0.0.1:18081`
 - Backend: `http://127.0.0.1:18080`
+
+Остановка локального стенда:
+
+```bash
+./scripts/stop_minikube_local.sh
+```
+
+Полное удаление кластера вместо остановки:
+
+```bash
+MINIKUBE_ACTION=delete PURGE=1 ./scripts/stop_minikube_local.sh
+```
 
 ## 5. HPA
 Манифест: `deploy/k8s/backend-hpa.yaml`
