@@ -245,12 +245,17 @@ jobs:
         if: env.RUN_BACKEND_IMAGE == 'true' || env.RUN_FRONTEND_IMAGE == 'true'
         uses: docker/setup-buildx-action@v3
 
+      - name: Set up QEMU
+        if: env.RUN_BACKEND_IMAGE == 'true' || env.RUN_FRONTEND_IMAGE == 'true'
+        uses: docker/setup-qemu-action@v3
+
       - name: Build and push backend image
         if: env.RUN_BACKEND_IMAGE == 'true'
         uses: docker/build-push-action@v6
         with:
           context: ./backend
           push: true
+          platforms: linux/amd64,linux/arm64
           tags: |
             ${{ steps.meta.outputs.backend_image_sha }}
             ${{ steps.meta.outputs.backend_image }}
@@ -263,6 +268,7 @@ jobs:
         with:
           context: ./frontend
           push: true
+          platforms: linux/amd64,linux/arm64
           tags: |
             ${{ steps.meta.outputs.frontend_image_sha }}
             ${{ steps.meta.outputs.frontend_image }}
