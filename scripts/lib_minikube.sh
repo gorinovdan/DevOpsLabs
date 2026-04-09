@@ -461,15 +461,22 @@ start_detached_command() {
   require_cmd python3
 
   python3 - "${log_file}" "$@" <<'PY'
+import os
 import subprocess
 import sys
 
 log_file = sys.argv[1]
 command = sys.argv[2:]
+child_env = {
+    key: value
+    for key, value in os.environ.items()
+    if key != "RUNNER_TRACKING_ID"
+}
 
 with open(log_file, "ab", buffering=0) as log_handle:
     process = subprocess.Popen(
         command,
+        env=child_env,
         stdin=subprocess.DEVNULL,
         stdout=log_handle,
         stderr=subprocess.STDOUT,
