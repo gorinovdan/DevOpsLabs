@@ -324,7 +324,7 @@ jobs:
   observability-verify:
     runs-on: [self-hosted, macOS, minikube-local]
     needs: deploy
-    if: needs.deploy.result == 'success'
+    if: ${{ !cancelled() && needs.deploy.result == 'success' }}
     concurrency:
       group: local-minikube-deploy
       cancel-in-progress: false
@@ -341,6 +341,7 @@ jobs:
     runs-on: [self-hosted, macOS, minikube-local]
     needs: deploy
     if: >-
+      !cancelled() &&
       needs.deploy.result == 'success' &&
       github.event_name == 'workflow_dispatch' &&
       inputs.run_hpa_validation
