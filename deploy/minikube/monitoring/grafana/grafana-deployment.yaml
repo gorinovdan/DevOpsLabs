@@ -52,6 +52,9 @@ spec:
             - name: grafana-dashboard-flowboard
               mountPath: /var/lib/grafana/dashboards/flowboard.json
               subPath: flowboard.json
+            - name: grafana-dashboard-flowboard-pod
+              mountPath: /var/lib/grafana/dashboards/flowboard-pod.json
+              subPath: flowboard-pod.json
       volumes:
         - name: grafana-datasources
           configMap:
@@ -62,3 +65,6 @@ spec:
         - name: grafana-dashboard-flowboard
           configMap:
             name: grafana-dashboard-flowboard
+        - name: grafana-dashboard-flowboard-pod
+          configMap:
+            name: grafana-dashboard-flowboard-pod
