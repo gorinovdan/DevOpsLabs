@@ -12,6 +12,8 @@ spec:
     metadata:
       labels:
         app: grafana
+      annotations:
+        flowboard.local/config-hash: __GRAFANA_CONFIG_HASH__
     spec:
       containers:
         - name: grafana
