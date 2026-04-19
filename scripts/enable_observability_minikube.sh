@@ -2,7 +2,7 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-K8S_DIR="${K8S_DIR:-${ROOT_DIR}/deploy/k8s}"
+K8S_DIR="${K8S_DIR:-${ROOT_DIR}/deploy/minikube}"
 MONITORING_NAMESPACE="${MONITORING_NAMESPACE:-monitoring}"
 
 AUTO_START_MINIKUBE="${AUTO_START_MINIKUBE:-0}"
@@ -17,21 +17,24 @@ BACKEND_IMAGE="${BACKEND_IMAGE:-ghcr.io/discipliny/dev_ops/backend:latest}"
 FRONTEND_IMAGE="${FRONTEND_IMAGE:-ghcr.io/discipliny/dev_ops/frontend:latest}"
 PROMETHEUS_IMAGE="${PROMETHEUS_IMAGE:-quay.io/prometheus/prometheus:v2.54.1}"
 GRAFANA_IMAGE="${GRAFANA_IMAGE:-docker.io/grafana/grafana-oss:11.2.2}"
-KUBE_STATE_METRICS_IMAGE="${KUBE_STATE_METRICS_IMAGE:-registry.k8s.io/kube-state-metrics/kube-state-metrics:v2.13.0}"
 METRICS_SERVER_IMAGE="${METRICS_SERVER_IMAGE:-registry.k8s.io/metrics-server/metrics-server:v0.8.1}"
 PROMETHEUS_RELEASE_VERSION="${PROMETHEUS_RELEASE_VERSION:-2.54.1}"
 GRAFANA_RELEASE_VERSION="${GRAFANA_RELEASE_VERSION:-11.2.2}"
 
 source "${ROOT_DIR}/scripts/lib_minikube.sh"
 
-apply_monitoring_manifest() {
-  local rendered_path
-  rendered_path="$(mktemp)"
-  trap 'rm -f "${rendered_path}"' RETURN
-  render_template_file "${K8S_DIR}/monitoring.yaml" "${rendered_path}"
-  kubectl_apply_if_changed "${rendered_path}" "${K8S_DIR}/monitoring.yaml"
-  trap - RETURN
-  rm -f "${rendered_path}"
+apply_monitoring_manifests() {
+  kubectl apply -f "${K8S_DIR}/namespaces/namespace.yaml"
+
+  kubectl_apply_if_changed "${K8S_DIR}/monitoring/prometheus/prometheus.yaml" "monitoring/prometheus/prometheus.yaml"
+  kubectl_apply_if_changed "${K8S_DIR}/monitoring/prometheus/prometheus-config.yaml" "monitoring/prometheus/prometheus-config.yaml"
+  apply_template_manifest "${K8S_DIR}/monitoring/prometheus/prometheus-deployment.yaml"
+  kubectl_apply_if_changed "${K8S_DIR}/monitoring/prometheus/prometheus-service.yaml" "monitoring/prometheus/prometheus-service.yaml"
+
+  kubectl_apply_if_changed "${K8S_DIR}/monitoring/grafana/grafana.yaml" "monitoring/grafana/grafana.yaml"
+  kubectl_apply_if_changed "${K8S_DIR}/monitoring/grafana/grafana-config.yaml" "monitoring/grafana/grafana-config.yaml"
+  apply_template_manifest "${K8S_DIR}/monitoring/grafana/grafana-deployment.yaml"
+  kubectl_apply_if_changed "${K8S_DIR}/monitoring/grafana/grafana-service.yaml" "monitoring/grafana/grafana-service.yaml"
 }
 
 wait_for_metrics_api() {
@@ -63,7 +66,6 @@ fi
 load_image_into_minikube "${METRICS_SERVER_IMAGE}"
 load_image_into_minikube "${PROMETHEUS_IMAGE}"
 load_image_into_minikube "${GRAFANA_IMAGE}"
-load_image_into_minikube "${KUBE_STATE_METRICS_IMAGE}"
 
 echo "Enabling metrics-server addon..."
 minikube addons enable metrics-server >/dev/null
@@ -76,8 +78,7 @@ fi
 wait_for_metrics_api
 
 echo "Applying monitoring manifests..."
-apply_monitoring_manifest
-kubectl -n "${MONITORING_NAMESPACE}" rollout status deployment/kube-state-metrics --timeout=300s
+apply_monitoring_manifests
 kubectl -n "${MONITORING_NAMESPACE}" rollout status deployment/prometheus --timeout=300s
 kubectl -n "${MONITORING_NAMESPACE}" rollout status deployment/grafana --timeout=300s
 
