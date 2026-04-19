@@ -121,6 +121,7 @@ assert_json_field_equals "${GRAFANA_URL}/api/health" "database" "ok"
 
 echo "Checking Grafana dashboard provisioning..."
 assert_json_field_equals "${GRAFANA_URL}/api/dashboards/uid/flowboard-overview" "dashboard.title" "FlowBoard Overview" -u admin:admin
+assert_json_field_equals "${GRAFANA_URL}/api/dashboards/uid/flowboard-pod-details" "dashboard.title" "FlowBoard Pod Details" -u admin:admin
 
 echo "Checking Prometheus health..."
 curl -fsS "${PROMETHEUS_URL}/-/healthy" | grep -q 'Healthy'

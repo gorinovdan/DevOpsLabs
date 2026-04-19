@@ -44,21 +44,41 @@ data:
       "annotations": { "list": [] },
       "editable": true,
       "graphTooltip": 0,
+      "links": [
+        {
+          "title": "Pod details",
+          "type": "link",
+          "url": "/d/flowboard-pod/flowboard-pod?${__url_time_range}",
+          "icon": "external link",
+          "targetBlank": false
+        }
+      ],
       "panels": [
         {
           "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "fieldConfig": { "defaults": {}, "overrides": [] },
+          "fieldConfig": {
+            "defaults": {
+              "links": [
+                {
+                  "title": "Open pod details: ${__field.labels.pod}",
+                  "url": "/d/flowboard-pod/flowboard-pod?var-pod=${__field.labels.pod}&${__url_time_range}",
+                  "targetBlank": false
+                }
+              ]
+            },
+            "overrides": []
+          },
           "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
           "id": 1,
           "options": { "legend": { "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
           "targets": [
             {
-              "expr": "sum by (pod) (rate(flowboard_http_requests_total[1m]))",
+              "expr": "sum by (pod) (rate(flowboard_http_requests_total{pod=~\"$pod\"}[1m]))",
               "legendFormat": "{{pod}}",
               "refId": "A"
             }
           ],
-          "title": "Requests Per Pod",
+          "title": "Requests Per Pod (click legend to drill down)",
           "type": "timeseries"
         },
         {
@@ -69,7 +89,7 @@ data:
           "options": { "legend": { "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
           "targets": [
             {
-              "expr": "histogram_quantile(0.95, sum by (le, route) (rate(flowboard_http_request_duration_seconds_bucket[5m])))",
+              "expr": "histogram_quantile(0.95, sum by (le, route) (rate(flowboard_http_request_duration_seconds_bucket{pod=~\"$pod\"}[5m])))",
               "legendFormat": "{{route}}",
               "refId": "A"
             }
@@ -79,29 +99,340 @@ data:
         },
         {
           "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "fieldConfig": { "defaults": {}, "overrides": [] },
-          "gridPos": { "h": 8, "w": 24, "x": 0, "y": 8 },
+          "fieldConfig": {
+            "defaults": {
+              "links": [
+                {
+                  "title": "Open pod details: ${__field.labels.pod}",
+                  "url": "/d/flowboard-pod/flowboard-pod?var-pod=${__field.labels.pod}&${__url_time_range}",
+                  "targetBlank": false
+                }
+              ]
+            },
+            "overrides": []
+          },
+          "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
           "id": 3,
           "options": { "legend": { "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
           "targets": [
             {
-              "expr": "sum by (pod) (flowboard_http_inflight_requests)",
+              "expr": "sum by (pod) (flowboard_http_inflight_requests{pod=~\"$pod\"})",
               "legendFormat": "{{pod}}",
               "refId": "A"
             }
           ],
-          "title": "Inflight Requests By Pod",
+          "title": "Inflight Requests By Pod (click legend to drill down)",
           "type": "timeseries"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "fieldConfig": {
+            "defaults": {
+              "custom": { "align": "auto", "displayMode": "auto" },
+              "links": [
+                {
+                  "title": "Open pod details: ${__data.fields.pod}",
+                  "url": "/d/flowboard-pod/flowboard-pod?var-pod=${__data.fields.pod}&${__url_time_range}",
+                  "targetBlank": false
+                }
+              ]
+            },
+            "overrides": []
+          },
+          "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 },
+          "id": 4,
+          "options": {
+            "showHeader": true,
+            "cellHeight": "sm"
+          },
+          "targets": [
+            {
+              "expr": "sum by (pod, namespace, node) (flowboard_http_inflight_requests{pod=~\"$pod\"})",
+              "legendFormat": "{{pod}}",
+              "format": "table",
+              "instant": true,
+              "refId": "A"
+            }
+          ],
+          "transformations": [
+            {
+              "id": "organize",
+              "options": {
+                "excludeByName": { "Time": true, "Value": false },
+                "renameByName": { "Value": "inflight" }
+              }
+            }
+          ],
+          "title": "Pods (click a row to open pod details)",
+          "type": "table"
         }
       ],
       "refresh": "10s",
       "schemaVersion": 39,
       "style": "dark",
       "tags": ["flowboard", "lab3"],
-      "templating": { "list": [] },
+      "templating": {
+        "list": [
+          {
+            "name": "pod",
+            "label": "Pod",
+            "type": "query",
+            "datasource": { "type": "prometheus", "uid": "prometheus" },
+            "query": { "query": "label_values(flowboard_http_inflight_requests, pod)", "refId": "PrometheusVariableQueryEditor-VariableQuery" },
+            "refresh": 2,
+            "includeAll": true,
+            "multi": true,
+            "allValue": ".*",
+            "current": { "text": "All", "value": "$__all", "selected": true },
+            "sort": 1
+          }
+        ]
+      },
       "time": { "from": "now-15m", "to": "now" },
       "timezone": "",
       "title": "FlowBoard Overview",
       "uid": "flowboard-overview",
+      "version": 2
+    }
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-dashboard-flowboard-pod
+  namespace: monitoring
+data:
+  flowboard-pod.json: |
+    {
+      "annotations": { "list": [] },
+      "editable": true,
+      "graphTooltip": 1,
+      "links": [
+        {
+          "title": "Back to overview",
+          "type": "link",
+          "url": "/d/flowboard-overview/flowboard-overview?${__url_time_range}",
+          "icon": "external link",
+          "targetBlank": false
+        }
+      ],
+      "panels": [
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "gridPos": { "h": 4, "w": 6, "x": 0, "y": 0 },
+          "id": 10,
+          "fieldConfig": { "defaults": { "unit": "short", "decimals": 0 }, "overrides": [] },
+          "options": { "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "colorMode": "value", "graphMode": "area" },
+          "targets": [
+            { "expr": "sum(flowboard_http_inflight_requests{pod=~\"$pod\"})", "refId": "A" }
+          ],
+          "title": "Inflight",
+          "type": "stat"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "gridPos": { "h": 4, "w": 6, "x": 6, "y": 0 },
+          "id": 11,
+          "fieldConfig": { "defaults": { "unit": "reqps", "decimals": 2 }, "overrides": [] },
+          "options": { "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "colorMode": "value", "graphMode": "area" },
+          "targets": [
+            { "expr": "sum(rate(flowboard_http_requests_total{pod=~\"$pod\"}[1m]))", "refId": "A" }
+          ],
+          "title": "Requests / sec",
+          "type": "stat"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "gridPos": { "h": 4, "w": 6, "x": 12, "y": 0 },
+          "id": 12,
+          "fieldConfig": { "defaults": { "unit": "s", "decimals": 3 }, "overrides": [] },
+          "options": { "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "colorMode": "value", "graphMode": "area" },
+          "targets": [
+            { "expr": "histogram_quantile(0.95, sum by (le) (rate(flowboard_http_request_duration_seconds_bucket{pod=~\"$pod\"}[5m])))", "refId": "A" }
+          ],
+          "title": "p95 latency",
+          "type": "stat"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "gridPos": { "h": 4, "w": 6, "x": 18, "y": 0 },
+          "id": 13,
+          "fieldConfig": { "defaults": { "unit": "percentunit", "decimals": 2 }, "overrides": [] },
+          "options": { "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "colorMode": "value", "graphMode": "area" },
+          "targets": [
+            {
+              "expr": "sum(rate(flowboard_http_requests_total{pod=~\"$pod\",status=~\"5..\"}[5m])) / clamp_min(sum(rate(flowboard_http_requests_total{pod=~\"$pod\"}[5m])), 1e-9)",
+              "refId": "A"
+            }
+          ],
+          "title": "5xx error ratio (5m)",
+          "type": "stat"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "gridPos": { "h": 8, "w": 12, "x": 0, "y": 4 },
+          "id": 20,
+          "fieldConfig": { "defaults": { "unit": "reqps" }, "overrides": [] },
+          "options": { "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["mean", "max"] }, "tooltip": { "mode": "multi" } },
+          "targets": [
+            {
+              "expr": "sum by (route, status) (rate(flowboard_http_requests_total{pod=~\"$pod\"}[1m]))",
+              "legendFormat": "{{route}} [{{status}}]",
+              "refId": "A"
+            }
+          ],
+          "title": "Request rate by route/status",
+          "type": "timeseries"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "gridPos": { "h": 8, "w": 12, "x": 12, "y": 4 },
+          "id": 21,
+          "fieldConfig": { "defaults": { "unit": "s" }, "overrides": [] },
+          "options": { "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["mean", "max"] }, "tooltip": { "mode": "multi" } },
+          "targets": [
+            {
+              "expr": "histogram_quantile(0.50, sum by (le) (rate(flowboard_http_request_duration_seconds_bucket{pod=~\"$pod\"}[5m])))",
+              "legendFormat": "p50",
+              "refId": "A"
+            },
+            {
+              "expr": "histogram_quantile(0.95, sum by (le) (rate(flowboard_http_request_duration_seconds_bucket{pod=~\"$pod\"}[5m])))",
+              "legendFormat": "p95",
+              "refId": "B"
+            },
+            {
+              "expr": "histogram_quantile(0.99, sum by (le) (rate(flowboard_http_request_duration_seconds_bucket{pod=~\"$pod\"}[5m])))",
+              "legendFormat": "p99",
+              "refId": "C"
+            }
+          ],
+          "title": "Latency percentiles",
+          "type": "timeseries"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "gridPos": { "h": 8, "w": 8, "x": 0, "y": 12 },
+          "id": 30,
+          "fieldConfig": { "defaults": { "unit": "percentunit" }, "overrides": [] },
+          "options": { "legend": { "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
+          "targets": [
+            {
+              "expr": "sum by (pod) (rate(process_cpu_seconds_total{pod=~\"$pod\",namespace=\"flowboard\"}[1m]))",
+              "legendFormat": "{{pod}}",
+              "refId": "A"
+            }
+          ],
+          "title": "CPU usage (cores)",
+          "type": "timeseries"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "gridPos": { "h": 8, "w": 8, "x": 8, "y": 12 },
+          "id": 31,
+          "fieldConfig": { "defaults": { "unit": "bytes" }, "overrides": [] },
+          "options": { "legend": { "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
+          "targets": [
+            {
+              "expr": "sum by (pod) (process_resident_memory_bytes{pod=~\"$pod\",namespace=\"flowboard\"})",
+              "legendFormat": "{{pod}} rss",
+              "refId": "A"
+            },
+            {
+              "expr": "sum by (pod) (go_memstats_heap_alloc_bytes{pod=~\"$pod\",namespace=\"flowboard\"})",
+              "legendFormat": "{{pod}} heap",
+              "refId": "B"
+            }
+          ],
+          "title": "Memory",
+          "type": "timeseries"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "gridPos": { "h": 8, "w": 8, "x": 16, "y": 12 },
+          "id": 32,
+          "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+          "options": { "legend": { "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
+          "targets": [
+            {
+              "expr": "sum by (pod) (go_goroutines{pod=~\"$pod\",namespace=\"flowboard\"})",
+              "legendFormat": "{{pod}}",
+              "refId": "A"
+            }
+          ],
+          "title": "Goroutines",
+          "type": "timeseries"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "gridPos": { "h": 4, "w": 12, "x": 0, "y": 20 },
+          "id": 40,
+          "fieldConfig": { "defaults": { "unit": "s" }, "overrides": [] },
+          "options": { "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": true }, "colorMode": "value", "graphMode": "none", "textMode": "value_and_name" },
+          "targets": [
+            {
+              "expr": "time() - min by (pod) (process_start_time_seconds{pod=~\"$pod\",namespace=\"flowboard\"})",
+              "legendFormat": "{{pod}}",
+              "refId": "A"
+            }
+          ],
+          "title": "Pod process uptime",
+          "type": "stat"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "gridPos": { "h": 4, "w": 12, "x": 12, "y": 20 },
+          "id": 41,
+          "fieldConfig": {
+            "defaults": {
+              "custom": { "align": "auto", "displayMode": "auto" }
+            },
+            "overrides": []
+          },
+          "options": { "showHeader": true, "cellHeight": "sm" },
+          "targets": [
+            {
+              "expr": "sum by (pod, namespace, node, instance) (flowboard_http_inflight_requests{pod=~\"$pod\"})",
+              "format": "table",
+              "instant": true,
+              "refId": "A"
+            }
+          ],
+          "transformations": [
+            {
+              "id": "organize",
+              "options": {
+                "excludeByName": { "Time": true, "Value": true },
+                "renameByName": {}
+              }
+            }
+          ],
+          "title": "Pod placement",
+          "type": "table"
+        }
+      ],
+      "refresh": "10s",
+      "schemaVersion": 39,
+      "style": "dark",
+      "tags": ["flowboard", "lab3", "pod"],
+      "templating": {
+        "list": [
+          {
+            "name": "pod",
+            "label": "Pod",
+            "type": "query",
+            "datasource": { "type": "prometheus", "uid": "prometheus" },
+            "query": { "query": "label_values(flowboard_http_inflight_requests, pod)", "refId": "PrometheusVariableQueryEditor-VariableQuery" },
+            "refresh": 2,
+            "includeAll": false,
+            "multi": false,
+            "current": { "text": "", "value": "", "selected": false },
+            "sort": 1
+          }
+        ]
+      },
+      "time": { "from": "now-15m", "to": "now" },
+      "timezone": "",
+      "title": "FlowBoard Pod",
+      "uid": "flowboard-pod",
       "version": 1
     }
