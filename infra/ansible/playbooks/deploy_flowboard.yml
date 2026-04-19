@@ -53,8 +53,8 @@
       loop:
         - "{{ remote_k8s_dir }}/namespace.yaml"
         - "{{ remote_k8s_dir }}/postgres.yaml"
-        - "{{ remote_k8s_dir }}/backend.yaml"
-        - "{{ remote_k8s_dir }}/frontend.yaml"
+        - "{{ remote_k8s_dir }}/backend-deployment.yaml"
+        - "{{ remote_k8s_dir }}/frontend-deployment.yaml"
         - "{{ remote_k8s_dir }}/backend-hpa.yaml"
         - "{{ remote_k8s_dir }}/frontend-hpa.yaml"
 

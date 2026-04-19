@@ -1,0 +1,22 @@
+apiVersion: v1
+kind: Secret
+metadata:
+  name: postgres-secret
+  namespace: flowboard
+type: Opaque
+data:
+  POSTGRES_USER: Zmxvd2JvYXJk
+  POSTGRES_PASSWORD: Zmxvd2JvYXJk
+  POSTGRES_DB: Zmxvd2JvYXJk
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: postgres-data
+  namespace: flowboard
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 2Gi
