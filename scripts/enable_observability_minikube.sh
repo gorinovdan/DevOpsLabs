@@ -26,10 +26,16 @@ source "${ROOT_DIR}/scripts/lib_minikube.sh"
 apply_monitoring_manifests() {
   kubectl apply -f "${K8S_DIR}/namespaces/namespace.yaml"
 
+  export PROMETHEUS_CONFIG_HASH
+  PROMETHEUS_CONFIG_HASH="$(compute_file_hash "${K8S_DIR}/monitoring/prometheus/prometheus-config.yaml")"
+
   kubectl_apply_if_changed "${K8S_DIR}/monitoring/prometheus/prometheus.yaml" "monitoring/prometheus/prometheus.yaml"
   kubectl_apply_if_changed "${K8S_DIR}/monitoring/prometheus/prometheus-config.yaml" "monitoring/prometheus/prometheus-config.yaml"
   apply_template_manifest "${K8S_DIR}/monitoring/prometheus/prometheus-deployment.yaml"
   kubectl_apply_if_changed "${K8S_DIR}/monitoring/prometheus/prometheus-service.yaml" "monitoring/prometheus/prometheus-service.yaml"
+
+  export GRAFANA_CONFIG_HASH
+  GRAFANA_CONFIG_HASH="$(compute_file_hash "${K8S_DIR}/monitoring/grafana/grafana-config.yaml")"
 
   kubectl_apply_if_changed "${K8S_DIR}/monitoring/grafana/grafana.yaml" "monitoring/grafana/grafana.yaml"
   kubectl_apply_if_changed "${K8S_DIR}/monitoring/grafana/grafana-config.yaml" "monitoring/grafana/grafana-config.yaml"

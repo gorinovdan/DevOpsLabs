@@ -394,6 +394,8 @@ render_template_file() {
     -e "s#__INIT_POSTGRES_IMAGE__#${INIT_POSTGRES_IMAGE}#g" \
     -e "s#__PROMETHEUS_IMAGE__#${PROMETHEUS_IMAGE}#g" \
     -e "s#__GRAFANA_IMAGE__#${GRAFANA_IMAGE}#g" \
+    -e "s#__PROMETHEUS_CONFIG_HASH__#${PROMETHEUS_CONFIG_HASH:-}#g" \
+    -e "s#__GRAFANA_CONFIG_HASH__#${GRAFANA_CONFIG_HASH:-}#g" \
     "${source_file}" > "${target_file}"
 }
 
