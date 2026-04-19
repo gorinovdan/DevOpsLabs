@@ -394,8 +394,19 @@ render_template_file() {
     -e "s#__INIT_POSTGRES_IMAGE__#${INIT_POSTGRES_IMAGE}#g" \
     -e "s#__PROMETHEUS_IMAGE__#${PROMETHEUS_IMAGE}#g" \
     -e "s#__GRAFANA_IMAGE__#${GRAFANA_IMAGE}#g" \
-    -e "s#__KUBE_STATE_METRICS_IMAGE__#${KUBE_STATE_METRICS_IMAGE}#g" \
     "${source_file}" > "${target_file}"
+}
+
+apply_template_manifest() {
+  local template_path="$1"
+  local rendered_path
+
+  rendered_path="$(mktemp)"
+  trap 'rm -f "${rendered_path}"' RETURN
+  render_template_file "${template_path}" "${rendered_path}"
+  kubectl_apply_if_changed "${rendered_path}" "${template_path}"
+  trap - RETURN
+  rm -f "${rendered_path}"
 }
 
 kubectl_apply_if_changed() {

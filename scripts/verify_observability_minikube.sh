@@ -128,12 +128,9 @@ curl -fsS "${PROMETHEUS_URL}/-/healthy" | grep -q 'Healthy'
 
 echo "Checking Prometheus scrape targets..."
 assert_query_has_ready_target 'up{job="flowboard-backend"}' 'flowboard-backend'
-assert_query_has_ready_target 'up{job="kube-state-metrics"}' 'kube-state-metrics'
 
-echo "Checking application and infrastructure metrics..."
+echo "Checking application metrics..."
 assert_query_has_series 'flowboard_http_requests_total' 'flowboard request counters'
-assert_query_has_series 'kube_horizontalpodautoscaler_status_current_replicas{namespace="flowboard",horizontalpodautoscaler="backend-hpa"}' 'backend HPA replicas'
-assert_query_has_series 'kube_deployment_status_replicas_available{namespace="flowboard",deployment="backend"}' 'backend deployment availability'
 
 echo
 echo "Observability verification passed."

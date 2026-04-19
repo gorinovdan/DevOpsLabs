@@ -2,7 +2,7 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-K8S_DIR="${K8S_DIR:-${ROOT_DIR}/deploy/k8s}"
+K8S_DIR="${K8S_DIR:-${ROOT_DIR}/deploy/minikube}"
 NAMESPACE="${NAMESPACE:-flowboard}"
 
 BUILD_LOCAL="${BUILD_LOCAL:-0}"
@@ -27,7 +27,6 @@ POSTGRES_IMAGE="${POSTGRES_IMAGE:-postgres:16-alpine}"
 METRICS_SERVER_IMAGE="${METRICS_SERVER_IMAGE:-registry.k8s.io/metrics-server/metrics-server:v0.8.1}"
 PROMETHEUS_IMAGE="${PROMETHEUS_IMAGE:-quay.io/prometheus/prometheus:v2.54.1}"
 GRAFANA_IMAGE="${GRAFANA_IMAGE:-docker.io/grafana/grafana-oss:11.2.2}"
-KUBE_STATE_METRICS_IMAGE="${KUBE_STATE_METRICS_IMAGE:-registry.k8s.io/kube-state-metrics/kube-state-metrics:v2.13.0}"
 LOADGEN_IMAGE="${LOADGEN_IMAGE:-busybox:1.36}"
 FRONTEND_NGINX_IMAGE="${FRONTEND_NGINX_IMAGE:-nginx:1.25-alpine}"
 PROMETHEUS_RELEASE_VERSION="${PROMETHEUS_RELEASE_VERSION:-2.54.1}"
@@ -124,27 +123,21 @@ prepare_observability_images() {
     "${GRAFANA_RELEASE_VERSION}"
 }
 
-apply_template_manifest() {
-  local template_path="$1"
-  local rendered_path
-
-  rendered_path="$(mktemp)"
-  trap 'rm -f "${rendered_path}"' RETURN
-  render_template_file "${template_path}" "${rendered_path}"
-  kubectl_apply_if_changed "${rendered_path}" "${template_path}"
-  trap - RETURN
-  rm -f "${rendered_path}"
-}
-
 apply_application_manifests() {
-  kubectl apply -f "${K8S_DIR}/namespace.yaml"
-  apply_template_manifest "${K8S_DIR}/postgres.yaml"
+  kubectl apply -f "${K8S_DIR}/namespaces/namespace.yaml"
+
+  kubectl_apply_if_changed "${K8S_DIR}/postgres/postgres.yaml" "postgres/postgres.yaml"
+  apply_template_manifest "${K8S_DIR}/postgres/postgres-deployment.yaml"
+  kubectl_apply_if_changed "${K8S_DIR}/postgres/postgres-service.yaml" "postgres/postgres-service.yaml"
   kubectl -n "${NAMESPACE}" rollout status deployment/postgres --timeout=300s
 
-  apply_template_manifest "${K8S_DIR}/backend.yaml"
-  apply_template_manifest "${K8S_DIR}/frontend.yaml"
-  kubectl_apply_if_changed "${K8S_DIR}/backend-hpa.yaml" "${K8S_DIR}/backend-hpa.yaml"
-  kubectl_apply_if_changed "${K8S_DIR}/frontend-hpa.yaml" "${K8S_DIR}/frontend-hpa.yaml"
+  apply_template_manifest "${K8S_DIR}/backend/backend-deployment.yaml"
+  kubectl_apply_if_changed "${K8S_DIR}/backend/backend-service.yaml" "backend/backend-service.yaml"
+  kubectl_apply_if_changed "${K8S_DIR}/backend/backend-hpa.yaml" "backend/backend-hpa.yaml"
+
+  apply_template_manifest "${K8S_DIR}/frontend/frontend-deployment.yaml"
+  kubectl_apply_if_changed "${K8S_DIR}/frontend/frontend-service.yaml" "frontend/frontend-service.yaml"
+  kubectl_apply_if_changed "${K8S_DIR}/frontend/frontend-hpa.yaml" "frontend/frontend-hpa.yaml"
 
   kubectl -n "${NAMESPACE}" rollout status deployment/backend --timeout=300s
   kubectl -n "${NAMESPACE}" rollout status deployment/frontend --timeout=300s
