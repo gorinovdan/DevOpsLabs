@@ -87,16 +87,43 @@ ensure_runtime_images_available() {
   load_image_into_minikube "${INIT_POSTGRES_IMAGE}"
 }
 
+metrics_server_has_pull_error() {
+  kubectl -n kube-system get pods -l k8s-app=metrics-server \
+    -o jsonpath='{range .items[*]}{.status.containerStatuses[*].state.waiting.reason}{"\n"}{end}' \
+    2>/dev/null | grep -qE "ImagePullBackOff|ErrImagePull"
+}
+
+metrics_server_uses_digest_pin() {
+  kubectl -n kube-system get deploy metrics-server \
+    -o jsonpath='{.spec.template.spec.containers[0].image}' 2>/dev/null \
+    | grep -q "@sha256:"
+}
+
+stabilize_metrics_server_image() {
+  if metrics_server_uses_digest_pin || metrics_server_has_pull_error; then
+    echo "Using locally loaded metrics-server image to avoid registry pull issues..."
+    kubectl -n kube-system set image deploy/metrics-server "metrics-server=${METRICS_SERVER_IMAGE}" >/dev/null
+  fi
+}
+
 ensure_metrics_server() {
   load_image_into_minikube "${METRICS_SERVER_IMAGE}"
 
   echo "Enabling metrics-server addon..."
-  minikube addons enable metrics-server >/dev/null
+  run_minikube addons enable metrics-server >/dev/null
+
+  for _ in $(seq 1 15); do
+    if kubectl -n kube-system get deploy metrics-server >/dev/null 2>&1; then
+      break
+    fi
+    sleep 2
+  done
 
   if kubectl get apiservice v1beta1.metrics.k8s.io -o jsonpath='{.status.conditions[?(@.type=="Available")].status}' 2>/dev/null | grep -q '^True$'; then
     return 0
   fi
 
+  stabilize_metrics_server_image
   kubectl -n kube-system delete pod -l k8s-app=metrics-server --ignore-not-found >/dev/null 2>&1 || true
   kubectl -n kube-system rollout status deployment/metrics-server --timeout=300s
 
