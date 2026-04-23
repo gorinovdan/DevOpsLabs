@@ -8,6 +8,89 @@ require_cmd() {
   fi
 }
 
+proxy_targets_loopback() {
+  local proxy_value="$1"
+  local proxy_host=""
+
+  proxy_host="${proxy_value#*://}"
+  proxy_host="${proxy_host%%/*}"
+
+  if [[ "${proxy_host}" == *"@"* ]]; then
+    proxy_host="${proxy_host##*@}"
+  fi
+
+  case "${proxy_host%%:*}" in
+    localhost|127.*|::1|'[::1]')
+      return 0
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+append_no_proxy_entry() {
+  local current_value="$1"
+  local entry="$2"
+
+  if [[ -z "${current_value}" ]]; then
+    printf '%s\n' "${entry}"
+    return 0
+  fi
+
+  case ",${current_value}," in
+    *,"${entry}",*)
+      printf '%s\n' "${current_value}"
+      ;;
+    *)
+      printf '%s,%s\n' "${current_value}" "${entry}"
+      ;;
+  esac
+}
+
+build_minikube_no_proxy() {
+  local no_proxy_value="${NO_PROXY:-${no_proxy:-}}"
+  local entry=""
+
+  for entry in localhost 127.0.0.1 ::1 192.168.49.1 192.168.49.2 host.docker.internal kubernetes.default.svc .svc .svc.cluster.local; do
+    no_proxy_value="$(append_no_proxy_entry "${no_proxy_value}" "${entry}")"
+  done
+
+  printf '%s\n' "${no_proxy_value}"
+}
+
+run_minikube() {
+  local no_proxy_value=""
+  local var=""
+  local value=""
+  local stripped_loopback_proxy="0"
+  local -a env_cmd=(env)
+  local -a env_assignments=()
+  local -a proxy_vars=(HTTP_PROXY HTTPS_PROXY http_proxy https_proxy ALL_PROXY all_proxy)
+
+  no_proxy_value="$(build_minikube_no_proxy)"
+  env_assignments+=("NO_PROXY=${no_proxy_value}" "no_proxy=${no_proxy_value}")
+
+  for var in "${proxy_vars[@]}"; do
+    value="${!var-}"
+    if [[ -n "${value}" ]] && proxy_targets_loopback "${value}"; then
+      env_cmd+=("-u" "${var}")
+      stripped_loopback_proxy="1"
+    fi
+  done
+
+  if [[ "${stripped_loopback_proxy}" == "1" ]]; then
+    echo "Ignoring loopback proxy environment for minikube command." >&2
+  fi
+
+  "${env_cmd[@]}" "${env_assignments[@]}" minikube "$@"
+}
+
+reset_minikube_profile() {
+  echo "Resetting minikube profile before retry..." >&2
+  run_minikube delete >/dev/null 2>&1 || true
+}
+
 compute_file_hash() {
   local file_path="$1"
 
@@ -138,7 +221,7 @@ ensure_minikube_running() {
   local cpus="${3:-4}"
   local memory="${4:-6144}"
 
-  if minikube status >/dev/null 2>&1; then
+  if run_minikube status >/dev/null 2>&1; then
     return 0
   fi
 
@@ -148,7 +231,13 @@ ensure_minikube_running() {
   fi
 
   echo "Starting minikube with driver=${driver}, cpus=${cpus}, memory=${memory}..."
-  minikube start --driver="${driver}" --cpus="${cpus}" --memory="${memory}"
+  if run_minikube start --driver="${driver}" --cpus="${cpus}" --memory="${memory}"; then
+    return 0
+  fi
+
+  reset_minikube_profile
+  echo "Retrying minikube start with a clean profile..." >&2
+  run_minikube start --driver="${driver}" --cpus="${cpus}" --memory="${memory}"
 }
 
 ensure_host_image() {
@@ -320,7 +409,7 @@ build_local_observability_images() {
 image_present_in_minikube() {
   local image="$1"
   (
-    eval "$(minikube -p minikube docker-env --shell bash)"
+    eval "$(run_minikube -p minikube docker-env --shell bash)"
     docker image inspect "${image}" >/dev/null 2>&1
   )
 }
@@ -330,7 +419,7 @@ pull_image_directly_in_minikube() {
 
   echo "Pulling image directly in minikube: ${image}"
   (
-    eval "$(minikube -p minikube docker-env --shell bash)"
+    eval "$(run_minikube -p minikube docker-env --shell bash)"
     docker pull "${image}"
   )
 }
@@ -348,7 +437,7 @@ load_image_into_minikube() {
   if docker image inspect "${image}" >/dev/null 2>&1; then
     echo "Loading image into minikube: ${image}"
     docker save "${image}" | (
-      eval "$(minikube -p minikube docker-env --shell bash)"
+      eval "$(run_minikube -p minikube docker-env --shell bash)"
       docker load >/dev/null
     )
     return 0
@@ -362,7 +451,7 @@ load_image_into_minikube() {
 
   echo "Loading image into minikube: ${image}"
   docker save "${image}" | (
-    eval "$(minikube -p minikube docker-env --shell bash)"
+    eval "$(run_minikube -p minikube docker-env --shell bash)"
     docker load >/dev/null
   )
 }
