@@ -82,7 +82,21 @@ preload_argocd_images_into_minikube() {
   local img
   for img in "${images[@]}"; do
     echo "Pre-loading Argo CD image into minikube: ${img}"
-    load_image_into_minikube "${img}"
+    if ! load_image_into_minikube "${img}"; then
+      echo "Error: failed to preload Argo CD image into minikube: ${img}" >&2
+      exit 1
+    fi
+  done
+
+  echo "Argo CD images now in minikube docker:"
+  eval "$(minikube -p minikube docker-env --shell bash)"
+  for img in "${images[@]}"; do
+    if docker image inspect "${img}" >/dev/null 2>&1; then
+      echo "  ✓ ${img}"
+    else
+      echo "  ✗ ${img} (missing!)"
+      exit 1
+    fi
   done
 }
 
