@@ -56,13 +56,16 @@
         - "{{ remote_k8s_dir }}/backend-deployment.yaml"
         - "{{ remote_k8s_dir }}/frontend-deployment.yaml"
         - "{{ remote_k8s_dir }}/backend-hpa.yaml"
-        - "{{ remote_k8s_dir }}/frontend-hpa.yaml"
+        - "{{ remote_k8s_dir }}/fkubectl logs -n flowboard
+          postgres-68b6f7cbfc-5ntnjrontend-hpa.yaml"
 
     - name: Set backend image
-      ansible.builtin.command: "kubectl -n flowboard set image deployment/backend backend={{ backend_image }}"
+      ansible.builtin.command: "kubectl -n flowboard set image deployment/backend
+        backend={{ backend_image }}"
 
     - name: Set frontend image
-      ansible.builtin.command: "kubectl -n flowboard set image deployment/frontend frontend={{ frontend_image }}"
+      ansible.builtin.command: "kubectl -n flowboard set image deployment/frontend
+        frontend={{ frontend_image }}"
 
     - name: Wait for postgres rollout
       ansible.builtin.command: kubectl -n flowboard rollout status deployment/postgres --timeout=300s
