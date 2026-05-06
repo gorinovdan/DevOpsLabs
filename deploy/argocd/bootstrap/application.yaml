@@ -11,10 +11,6 @@ spec:
     repoURL: https://github.com/gorinovdan/DevOpsLabs.git
     targetRevision: main
     path: deploy/argocd/app
-    kustomize:
-      images:
-        - ghcr.io/gorinovdan/devopslabs/backend:latest
-        - ghcr.io/gorinovdan/devopslabs/frontend:latest
   destination:
     server: https://kubernetes.default.svc
     namespace: flowboard
@@ -26,10 +22,23 @@ spec:
     syncOptions:
       - CreateNamespace=true
       - ApplyOutOfSyncOnly=true
-      - ServerSideApply=true
+      - RespectIgnoreDifferences=true
     retry:
       limit: 5
       backoff:
         duration: 10s
         factor: 2
         maxDuration: 3m
+  ignoreDifferences:
+    - group: apps
+      kind: Deployment
+      jsonPointers:
+        - /status/terminatingReplicas
+    - group: apps
+      kind: ReplicaSet
+      jsonPointers:
+        - /status/terminatingReplicas
+    - group: apps
+      kind: StatefulSet
+      jsonPointers:
+        - /status/terminatingReplicas

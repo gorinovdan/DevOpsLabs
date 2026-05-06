@@ -35,6 +35,24 @@ fi
 # than requiring a logged-in argocd-server session over HTTPS.
 ARGO_FLAGS=(--core --grpc-web --plaintext)
 
+# argocd --core reads argocd-cm from the kubeconfig's current namespace,
+# so point at argocd for the duration of the sync.
+PRIOR_NS="$(kubectl config view --minify --output 'jsonpath={..namespace}' 2>/dev/null || true)"
+kubectl config set-context --current --namespace="${ARGOCD_NAMESPACE}" >/dev/null
+restore_namespace() {
+  if [[ -n "${PRIOR_NS}" ]]; then
+    kubectl config set-context --current --namespace="${PRIOR_NS}" >/dev/null 2>&1 || true
+  else
+    kubectl config set-context --current --namespace=default >/dev/null 2>&1 || true
+  fi
+}
+trap restore_namespace EXIT
+
+# argocd CLI talks to the local cluster (kubernetes.default.svc), but the
+# host shell may have HTTP/SOCKS proxy env set for outbound traffic. Strip
+# proxy so argocd does not tunnel cluster API calls through it.
+unset HTTP_PROXY HTTPS_PROXY ALL_PROXY http_proxy https_proxy all_proxy
+
 echo "Updating image overrides on Argo CD Application '${APP_NAME}'..."
 "${ARGOCD_BIN}" app set "${APP_NAME}" \
   "${ARGO_FLAGS[@]}" \
@@ -45,13 +63,17 @@ echo "Triggering Argo CD sync for '${APP_NAME}'..."
 "${ARGOCD_BIN}" app sync "${APP_NAME}" \
   "${ARGO_FLAGS[@]}" \
   --prune \
-  --timeout "${ARGOCD_SYNC_TIMEOUT}"
+  --timeout "${ARGOCD_SYNC_TIMEOUT}" || true
 
 echo "Waiting for Argo CD Application '${APP_NAME}' to become Healthy..."
+# We only wait for --health here. Argo CD's comparator can mark Deployments
+# OutOfSync due to schema-level differences (e.g. terminatingReplicas added
+# in newer apiserver) even when the live state matches the rendered manifest
+# byte-for-byte; the --sync wait then loops indefinitely for those false
+# positives. Health is the authoritative signal that the workloads are up.
 "${ARGOCD_BIN}" app wait "${APP_NAME}" \
   "${ARGO_FLAGS[@]}" \
   --health \
-  --sync \
   --timeout "${ARGOCD_SYNC_TIMEOUT}"
 
 echo

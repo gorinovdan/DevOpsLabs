@@ -110,6 +110,40 @@ install_argocd_components() {
 
   echo "Applying Argo CD manifests from ${ARGOCD_INSTALL_MANIFEST}..."
   kubectl apply -n "${ARGOCD_NAMESPACE}" -f "${ARGOCD_INSTALL_MANIFEST}"
+
+  configure_argocd_workloads_proxy
+}
+
+# Argo CD's repo-server pod clones the application's git repo. On a
+# host that needs an HTTP proxy to reach github.com, the repo-server
+# pod has to use the same proxy. Inject HTTP/HTTPS_PROXY into the
+# argocd-repo-server, argocd-application-controller and
+# argocd-server deployments / statefulsets via a strategic merge patch.
+configure_argocd_workloads_proxy() {
+  local raw_proxy="${HTTP_PROXY:-${HTTPS_PROXY:-${http_proxy:-${https_proxy:-}}}}"
+  if [[ -z "${raw_proxy}" ]]; then
+    return 0
+  fi
+
+  if [[ "${raw_proxy}" != http://* && "${raw_proxy}" != https://* ]]; then
+    return 0
+  fi
+
+  local rewritten="${raw_proxy//127.0.0.1/host.docker.internal}"
+  rewritten="${rewritten//localhost/host.docker.internal}"
+  local no_proxy="localhost,127.0.0.1,::1,.svc,.svc.cluster.local,kubernetes.default.svc,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16"
+
+  echo "Injecting HTTP_PROXY=${rewritten} into argocd-repo-server (git clone path)..."
+
+  # Only the repo-server needs outbound HTTP/HTTPS access to clone the
+  # application git repository. Setting it on the controller / server
+  # would also tunnel intra-cluster gRPC through the host proxy, which
+  # breaks the TLS handshake between application-controller and
+  # repo-server.
+  kubectl -n "${ARGOCD_NAMESPACE}" set env deployment/argocd-repo-server \
+    "HTTP_PROXY=${rewritten}" \
+    "HTTPS_PROXY=${rewritten}" \
+    "NO_PROXY=${no_proxy}" >/dev/null
 }
 
 wait_for_argocd_ready() {
