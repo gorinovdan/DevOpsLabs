@@ -1,0 +1,24 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: flowboard
+
+resources:
+  - namespace.yaml
+  - postgres-secret.yaml
+  - postgres-deployment.yaml
+  - backend-deployment.yaml
+  - frontend-deployment.yaml
+
+images:
+  - name: ghcr.io/gorinovdan/devopslabs/backend
+    newTag: latest
+  - name: ghcr.io/gorinovdan/devopslabs/frontend
+    newTag: latest
+
+labels:
+  - pairs:
+      app.kubernetes.io/part-of: flowboard
+      app.kubernetes.io/managed-by: argocd
+    includeSelectors: false
+    includeTemplates: false

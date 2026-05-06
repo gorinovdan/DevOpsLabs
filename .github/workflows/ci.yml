@@ -58,6 +58,23 @@ jobs:
             ci:
               - '.github/workflows/**'
 
+  notify-start:
+    runs-on: ubuntu-latest
+    needs: changes
+    if: always()
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Notify Telegram - pipeline started
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          EVENT_NAME: ${{ github.event_name }}
+          ACTOR: ${{ github.actor }}
+        run: |
+          chmod +x scripts/notify_telegram.sh
+          ./scripts/notify_telegram.sh "pipeline" "started" \
+            "Trigger: ${EVENT_NAME} | Actor: ${ACTOR}"
+
   backend-test:
     runs-on: ubuntu-latest
     needs: changes
@@ -79,15 +96,30 @@ jobs:
       - name: Compile
         run: go build ./...
 
-      - name: Test with race detector
-        run: go test -race -covermode=atomic -coverprofile=coverage.out ./...
+      - name: Install gotestsum (for SonarQube test report)
+        run: go install gotest.tools/gotestsum@v1.13.0
 
-      - name: Upload coverage
+      - name: Test with race detector and full coverage
+        run: |
+          set -euo pipefail
+          "$(go env GOPATH)/bin/gotestsum" \
+            --jsonfile test-report.json \
+            --format pkgname-and-test-fails \
+            -- -race -count=1 -covermode=atomic \
+                -coverpkg=./... \
+                -coverprofile=coverage.out ./...
+
+      - name: Show coverage summary
+        run: go tool cover -func=coverage.out | tail -1
+
+      - name: Upload backend coverage
         uses: actions/upload-artifact@v4
         with:
           name: backend-coverage
-          path: backend/coverage.out
-          if-no-files-found: ignore
+          path: |
+            backend/coverage.out
+            backend/test-report.json
+          if-no-files-found: error
           retention-days: 7
 
   frontend-test:
@@ -112,18 +144,96 @@ jobs:
       - name: Install dependencies
         run: npm ci --prefer-offline --no-audit --no-fund
 
-      - name: Test
+      - name: Test with coverage (lcov)
         run: npm test
 
       - name: Build bundle
         run: npm run build
 
-  backend-image:
+      - name: Upload frontend coverage
+        uses: actions/upload-artifact@v4
+        with:
+          name: frontend-coverage
+          path: frontend/coverage/lcov.info
+          if-no-files-found: error
+          retention-days: 7
+
+  sonar-scan:
     runs-on: [self-hosted, macOS, minikube-local]
-    needs: [changes, backend-test]
+    needs: [changes, backend-test, frontend-test]
     if: >-
       !cancelled() &&
       needs.backend-test.result == 'success' &&
+      needs.frontend-test.result == 'success'
+    concurrency:
+      group: local-sonar-scan
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Ensure scripts are executable
+        run: chmod +x scripts/*.sh
+
+      - name: Download backend coverage
+        uses: actions/download-artifact@v4
+        with:
+          name: backend-coverage
+          path: backend
+
+      - name: Download frontend coverage
+        uses: actions/download-artifact@v4
+        with:
+          name: frontend-coverage
+          path: frontend/coverage
+
+      - name: Verify coverage artefacts
+        run: |
+          test -s backend/coverage.out
+          test -s backend/test-report.json
+          test -s frontend/coverage/lcov.info
+
+      - name: Start SonarQube (idempotent)
+        env:
+          SONARQUBE_MODE: ${{ vars.SONARQUBE_MODE || 'native' }}
+          SONARQUBE_HOME: ${{ vars.SONARQUBE_HOME || '/Users/lasat/Downloads/sonarqube-26.4.0.121862' }}
+          SONARQUBE_URL: ${{ vars.SONARQUBE_URL || 'http://127.0.0.1:9000' }}
+        run: ./scripts/start_sonarqube.sh
+
+      - name: Configure FlowBoard quality gate (>= 80% coverage, no issues)
+        env:
+          SONARQUBE_URL: ${{ vars.SONARQUBE_URL || 'http://127.0.0.1:9000' }}
+          SONARQUBE_TOKEN: ${{ secrets.SONARQUBE_TOKEN }}
+          SONARQUBE_ADMIN_USER: ${{ secrets.SONARQUBE_ADMIN_USER || 'admin' }}
+          SONARQUBE_ADMIN_PASSWORD: ${{ secrets.SONARQUBE_ADMIN_PASSWORD || 'admin' }}
+          PROJECT_KEY: flowboard
+        run: ./scripts/sonar_quality_gate.sh
+
+      - name: Run sonar-scanner (waits for quality gate)
+        env:
+          SONARQUBE_URL: ${{ vars.SONARQUBE_URL || 'http://127.0.0.1:9000' }}
+          SONARQUBE_TOKEN: ${{ secrets.SONARQUBE_TOKEN }}
+          SONARQUBE_ADMIN_USER: ${{ secrets.SONARQUBE_ADMIN_USER || 'admin' }}
+          SONARQUBE_ADMIN_PASSWORD: ${{ secrets.SONARQUBE_ADMIN_PASSWORD || 'admin' }}
+          GITHUB_SHA: ${{ github.sha }}
+        run: ./scripts/run_sonar_scan.sh
+
+      - name: Notify Telegram - sonar-scan
+        if: always()
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          JOB_STATUS: ${{ job.status }}
+        run: |
+          ./scripts/notify_telegram.sh "sonar-scan" "${JOB_STATUS}" \
+            "Quality Gate enforced (coverage >= 80%, zero bugs/vulns)."
+
+  backend-image:
+    runs-on: [self-hosted, macOS, minikube-local]
+    needs: [changes, backend-test, sonar-scan]
+    if: >-
+      !cancelled() &&
+      needs.sonar-scan.result == 'success' &&
       (github.event_name == 'workflow_dispatch' ||
        needs.changes.outputs.backend == 'true' ||
        needs.changes.outputs.ci == 'true')
@@ -173,12 +283,21 @@ jobs:
             echo "latest_tag=${latest_tag}"
           } >> "${GITHUB_OUTPUT}"
 
+      - name: Notify Telegram - backend-image
+        if: always()
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          JOB_STATUS: ${{ job.status }}
+          IMAGE_TAG: ${{ steps.build.outputs.sha_tag }}
+        run: |
+          ./scripts/notify_telegram.sh "backend-image" "${JOB_STATUS}" "${IMAGE_TAG}"
+
   frontend-image:
     runs-on: [self-hosted, macOS, minikube-local]
-    needs: [changes, frontend-test]
+    needs: [changes, frontend-test, sonar-scan]
     if: >-
       !cancelled() &&
-      needs.frontend-test.result == 'success' &&
+      needs.sonar-scan.result == 'success' &&
       (github.event_name == 'workflow_dispatch' ||
        needs.changes.outputs.frontend == 'true' ||
        needs.changes.outputs.ci == 'true')
@@ -229,12 +348,22 @@ jobs:
             echo "latest_tag=${latest_tag}"
           } >> "${GITHUB_OUTPUT}"
 
-  deploy:
+      - name: Notify Telegram - frontend-image
+        if: always()
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          JOB_STATUS: ${{ job.status }}
+          IMAGE_TAG: ${{ steps.build.outputs.sha_tag }}
+        run: |
+          ./scripts/notify_telegram.sh "frontend-image" "${JOB_STATUS}" "${IMAGE_TAG}"
+
+  argocd-deploy:
     runs-on: [self-hosted, macOS, minikube-local]
-    needs: [changes, backend-image, frontend-image]
+    needs: [changes, sonar-scan, backend-image, frontend-image]
     if: >-
       !cancelled() &&
       github.event_name != 'pull_request' &&
+      needs.sonar-scan.result == 'success' &&
       needs.backend-image.result != 'failure' &&
       needs.frontend-image.result != 'failure' &&
       (github.event_name == 'workflow_dispatch' ||
@@ -288,7 +417,7 @@ jobs:
             frontend="${FRONTEND_LATEST_TAG:-ghcr.io/${repo_lc}/frontend:latest}"
           fi
 
-          echo "Deploying:"
+          echo "Deploying via Argo CD:"
           echo "  backend : ${backend}"
           echo "  frontend: ${frontend}"
 
@@ -297,34 +426,66 @@ jobs:
             echo "frontend=${frontend}"
           } >> "${GITHUB_OUTPUT}"
 
-      - name: Apply manifests and smoke test
-        env:
-          BACKEND_IMAGE: ${{ steps.images.outputs.backend }}
-          FRONTEND_IMAGE: ${{ steps.images.outputs.frontend }}
-          AUTO_START_MINIKUBE: "1"
-          BUILD_LOCAL: "0"
-          BUILD_OBSERVABILITY_LOCAL: "1"
-          ENABLE_OBSERVABILITY: "1"
-          ENABLE_PORT_FORWARD: "1"
-          RUN_SMOKE_TEST: "1"
-        run: ./scripts/deploy_minikube.sh
+      - name: Ensure minikube is running
+        run: |
+          source scripts/lib_minikube.sh
+          ensure_minikube_running "1" "docker" "4" "6144"
 
-      - name: Idempotent redeploy check
+      - name: Pre-load images into minikube
         env:
           BACKEND_IMAGE: ${{ steps.images.outputs.backend }}
           FRONTEND_IMAGE: ${{ steps.images.outputs.frontend }}
-          AUTO_START_MINIKUBE: "1"
-          BUILD_LOCAL: "0"
-          BUILD_OBSERVABILITY_LOCAL: "1"
-          ENABLE_OBSERVABILITY: "1"
+        run: |
+          source scripts/lib_minikube.sh
+          load_image_into_minikube "${BACKEND_IMAGE}"
+          load_image_into_minikube "${FRONTEND_IMAGE}"
+          load_image_into_minikube "postgres:16-alpine"
+
+      - name: Install / refresh Argo CD
+        env:
           ENABLE_PORT_FORWARD: "1"
-          RUN_SMOKE_TEST: "0"
-        run: ./scripts/deploy_minikube.sh
+        run: ./scripts/install_argocd.sh
+
+      - name: Sync FlowBoard application via Argo CD
+        env:
+          BACKEND_IMAGE: ${{ steps.images.outputs.backend }}
+          FRONTEND_IMAGE: ${{ steps.images.outputs.frontend }}
+        run: ./scripts/argocd_sync.sh
+
+      - name: Ensure observability stack is up
+        env:
+          ENABLE_OBSERVABILITY: "1"
+          BUILD_OBSERVABILITY_LOCAL: "1"
+        run: ./scripts/enable_observability_minikube.sh
+
+      - name: Re-establish app port-forwards
+        run: |
+          source scripts/lib_minikube.sh
+          ensure_port_forward "frontend"   "flowboard"  "frontend"   "18081" "80"   "/"
+          ensure_port_forward "backend"    "flowboard"  "backend"    "18080" "8080" "/health"
+          ensure_port_forward "grafana"    "monitoring" "grafana"    "13000" "80"   "/api/health"
+          ensure_port_forward "prometheus" "monitoring" "prometheus" "19090" "9090" "/-/healthy"
+
+      - name: Smoke test via frontend reverse proxy
+        env:
+          FRONTEND_URL: "http://127.0.0.1:18081"
+        run: ./scripts/smoke_test_minikube.sh
+
+      - name: Notify Telegram - argocd-deploy
+        if: always()
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          JOB_STATUS: ${{ job.status }}
+          BACKEND_IMAGE: ${{ steps.images.outputs.backend }}
+          FRONTEND_IMAGE: ${{ steps.images.outputs.frontend }}
+        run: |
+          ./scripts/notify_telegram.sh "argocd-deploy" "${JOB_STATUS}" \
+            "Backend: ${BACKEND_IMAGE} | Frontend: ${FRONTEND_IMAGE}"
 
   observability-verify:
     runs-on: [self-hosted, macOS, minikube-local]
-    needs: deploy
-    if: ${{ !cancelled() && needs.deploy.result == 'success' }}
+    needs: argocd-deploy
+    if: ${{ !cancelled() && needs.argocd-deploy.result == 'success' }}
     concurrency:
       group: local-minikube-deploy
       cancel-in-progress: false
@@ -337,12 +498,19 @@ jobs:
       - name: Verify observability stack
         run: ./scripts/verify_observability_minikube.sh
 
+      - name: Notify Telegram - observability-verify
+        if: always()
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          JOB_STATUS: ${{ job.status }}
+        run: ./scripts/notify_telegram.sh "observability-verify" "${JOB_STATUS}"
+
   hpa-validate:
     runs-on: [self-hosted, macOS, minikube-local]
-    needs: deploy
+    needs: argocd-deploy
     if: >-
       !cancelled() &&
-      needs.deploy.result == 'success' &&
+      needs.argocd-deploy.result == 'success' &&
       github.event_name == 'workflow_dispatch' &&
       inputs.run_hpa_validation
     concurrency:
@@ -357,18 +525,48 @@ jobs:
       - name: Run HPA load validation
         run: ./scripts/load_test_backend_hpa.sh
 
-  summary:
-    runs-on: [self-hosted, macOS, minikube-local]
-    needs: [deploy, observability-verify]
-    if: always() && needs.deploy.result == 'success'
-    concurrency:
-      group: local-minikube-deploy
-      cancel-in-progress: false
+      - name: Notify Telegram - hpa-validate
+        if: always()
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          JOB_STATUS: ${{ job.status }}
+        run: ./scripts/notify_telegram.sh "hpa-validate" "${JOB_STATUS}"
+
+  notify-summary:
+    runs-on: ubuntu-latest
+    needs:
+      - changes
+      - backend-test
+      - frontend-test
+      - sonar-scan
+      - backend-image
+      - frontend-image
+      - argocd-deploy
+      - observability-verify
+    if: always()
     steps:
-      - name: Print deployed resources
+      - uses: actions/checkout@v4
+
+      - name: Notify Telegram - pipeline summary
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          BACKEND_TEST_RESULT: ${{ needs.backend-test.result }}
+          FRONTEND_TEST_RESULT: ${{ needs.frontend-test.result }}
+          SONAR_RESULT: ${{ needs.sonar-scan.result }}
+          BACKEND_IMG_RESULT: ${{ needs.backend-image.result }}
+          FRONTEND_IMG_RESULT: ${{ needs.frontend-image.result }}
+          DEPLOY_RESULT: ${{ needs.argocd-deploy.result }}
+          OBS_RESULT: ${{ needs.observability-verify.result }}
         run: |
-          echo "Application namespace:"
-          kubectl -n flowboard get pods,svc,hpa
-          echo "---"
-          echo "Monitoring namespace:"
-          kubectl -n monitoring get pods,svc
+          chmod +x scripts/notify_telegram.sh
+          summary="backend-test=${BACKEND_TEST_RESULT}; frontend-test=${FRONTEND_TEST_RESULT}; sonar-scan=${SONAR_RESULT}; backend-image=${BACKEND_IMG_RESULT}; frontend-image=${FRONTEND_IMG_RESULT}; argocd-deploy=${DEPLOY_RESULT}; observability=${OBS_RESULT}"
+
+          overall="success"
+          for r in "${BACKEND_TEST_RESULT}" "${FRONTEND_TEST_RESULT}" "${SONAR_RESULT}" "${BACKEND_IMG_RESULT}" "${FRONTEND_IMG_RESULT}" "${DEPLOY_RESULT}" "${OBS_RESULT}"; do
+            case "${r}" in
+              failure) overall="failure" ;;
+              cancelled) [[ "${overall}" != "failure" ]] && overall="cancelled" ;;
+            esac
+          done
+
+          ./scripts/notify_telegram.sh "pipeline" "${overall}" "${summary}"

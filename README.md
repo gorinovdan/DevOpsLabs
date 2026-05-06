@@ -19,10 +19,11 @@ FlowBoard - учебное full-stack приложение для управле
 - CI/CD: GitHub Actions + self-hosted runner
 - Orchestration: Kubernetes (Minikube)
 
-## Отчёты по лабораторным 1-3
+## Отчёты по лабораторным 1-4
 - [ЛР1: Git, приложение, CI](LAB1_REPORT.md)
 - [ЛР2: Terraform + Ansible + Docker (локально)](LAB2_REPORT.md)
 - [ЛР3: Minikube + HPA + Monitoring + Runner deploy](LAB3_MINIKUBE.md)
+- [ЛР4: SonarQube + Argo CD + Telegram-нотификации](LAB4_REPORT.md)
 
 ## Быстрый локальный запуск
 

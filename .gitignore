@@ -22,7 +22,11 @@ Thumbs.db
 
 # Coverage
 coverage.out
+backend/test-report.json
 frontend/coverage/
+
+# SonarQube scanner work directory
+.scannerwork/
 
 # Terraform
 .terraform/

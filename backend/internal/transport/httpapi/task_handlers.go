@@ -223,77 +223,25 @@ func (h *TaskHandler) Update(c *gin.Context) {
 		return
 	}
 
-	if req.Title != nil {
-		value := strings.TrimSpace(*req.Title)
-		if value == "" {
-			respondError(c, http.StatusBadRequest, "название не может быть пустым")
-			return
-		}
-		if len(value) > maxTitleLength {
-			respondError(c, http.StatusBadRequest, "слишком длинное название")
-			return
-		}
-		task.Title = value
+	if !applyTitlePatch(c, task, req.Title) {
+		return
 	}
-
-	if req.Description != nil {
-		task.Description = strings.TrimSpace(*req.Description)
+	applyDescriptionPatch(task, req.Description)
+	if !applyPriorityPatch(c, task, req.Priority) {
+		return
 	}
-
-	if req.Priority != nil {
-		value, err := service.NormalizePriority(*req.Priority)
-		if err != nil {
-			respondError(c, http.StatusBadRequest, err.Error())
-			return
-		}
-		task.Priority = value
+	applyOwnerPatch(task, req.Owner)
+	if !applyEffortPatch(c, task, req.EffortHours) {
+		return
 	}
-
-	if req.Owner != nil {
-		owner := strings.TrimSpace(*req.Owner)
-		if owner == "" {
-			owner = defaultOwner
-		}
-		task.Owner = owner
+	if !applyStatusPatch(c, h.clock.Now(), task, req.Status) {
+		return
 	}
-
-	if req.EffortHours != nil {
-		value, err := normalizeEffort(*req.EffortHours)
-		if err != nil {
-			respondError(c, http.StatusBadRequest, err.Error())
-			return
-		}
-		task.EffortHours = value
+	if !applyDueDatePatch(c, task, req.DueDate) {
+		return
 	}
-
-	if req.Status != nil {
-		force := parseForce(c)
-		if err := applyStatusTransition(h.clock.Now(), task, *req.Status, force); err != nil {
-			respondError(c, http.StatusBadRequest, err.Error())
-			return
-		}
-	}
-
-	if len(req.DueDate) > 0 {
-		set, value, err := parseDueDatePatch(req.DueDate)
-		if err != nil {
-			respondError(c, http.StatusBadRequest, "некорректная дата; используйте RFC3339 или null")
-			return
-		}
-		if set {
-			task.DueDate = value
-		}
-	}
-
-	if len(req.Tags) > 0 {
-		set, value, err := parseTagsPatch(req.Tags)
-		if err != nil {
-			respondError(c, http.StatusBadRequest, err.Error())
-			return
-		}
-		if set {
-			task.Tags = value
-		}
+	if !applyTagsPatch(c, task, req.Tags) {
+		return
 	}
 
 	if err := h.store.Update(c.Request.Context(), task); err != nil {
@@ -302,6 +250,109 @@ func (h *TaskHandler) Update(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, toTaskResponse(*task, h.clock.Now()))
+}
+
+func applyTitlePatch(c *gin.Context, task *domain.Task, title *string) bool {
+	if title == nil {
+		return true
+	}
+	value := strings.TrimSpace(*title)
+	if value == "" {
+		respondError(c, http.StatusBadRequest, "название не может быть пустым")
+		return false
+	}
+	if len(value) > maxTitleLength {
+		respondError(c, http.StatusBadRequest, "слишком длинное название")
+		return false
+	}
+	task.Title = value
+	return true
+}
+
+func applyDescriptionPatch(task *domain.Task, description *string) {
+	if description == nil {
+		return
+	}
+	task.Description = strings.TrimSpace(*description)
+}
+
+func applyPriorityPatch(c *gin.Context, task *domain.Task, priority *string) bool {
+	if priority == nil {
+		return true
+	}
+	value, err := service.NormalizePriority(*priority)
+	if err != nil {
+		respondError(c, http.StatusBadRequest, err.Error())
+		return false
+	}
+	task.Priority = value
+	return true
+}
+
+func applyOwnerPatch(task *domain.Task, owner *string) {
+	if owner == nil {
+		return
+	}
+	value := strings.TrimSpace(*owner)
+	if value == "" {
+		value = defaultOwner
+	}
+	task.Owner = value
+}
+
+func applyEffortPatch(c *gin.Context, task *domain.Task, effortHours *int) bool {
+	if effortHours == nil {
+		return true
+	}
+	value, err := normalizeEffort(*effortHours)
+	if err != nil {
+		respondError(c, http.StatusBadRequest, err.Error())
+		return false
+	}
+	task.EffortHours = value
+	return true
+}
+
+func applyStatusPatch(c *gin.Context, now time.Time, task *domain.Task, status *string) bool {
+	if status == nil {
+		return true
+	}
+	force := parseForce(c)
+	if err := applyStatusTransition(now, task, *status, force); err != nil {
+		respondError(c, http.StatusBadRequest, err.Error())
+		return false
+	}
+	return true
+}
+
+func applyDueDatePatch(c *gin.Context, task *domain.Task, raw json.RawMessage) bool {
+	if len(raw) == 0 {
+		return true
+	}
+	set, value, err := parseDueDatePatch(raw)
+	if err != nil {
+		respondError(c, http.StatusBadRequest, "некорректная дата; используйте RFC3339 или null")
+		return false
+	}
+	if set {
+		task.DueDate = value
+	}
+	return true
+}
+
+func applyTagsPatch(c *gin.Context, task *domain.Task, raw json.RawMessage) bool {
+	if len(raw) == 0 {
+		return true
+	}
+	set, value, err := parseTagsPatch(raw)
+	if err != nil {
+		respondError(c, http.StatusBadRequest, err.Error())
+		return false
+	}
+	if set {
+		task.Tags = value
+	}
+	return true
 }
 
 func (h *TaskHandler) Delete(c *gin.Context) {

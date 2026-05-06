@@ -1,0 +1,35 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: flowboard
+  namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: flowboard
+  source:
+    repoURL: https://github.com/gorinovdan/DevOpsLabs.git
+    targetRevision: main
+    path: deploy/argocd/app
+    kustomize:
+      images:
+        - ghcr.io/gorinovdan/devopslabs/backend:latest
+        - ghcr.io/gorinovdan/devopslabs/frontend:latest
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: flowboard
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+      allowEmpty: false
+    syncOptions:
+      - CreateNamespace=true
+      - ApplyOutOfSyncOnly=true
+      - ServerSideApply=true
+    retry:
+      limit: 5
+      backoff:
+        duration: 10s
+        factor: 2
+        maxDuration: 3m

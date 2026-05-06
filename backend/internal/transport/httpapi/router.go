@@ -23,13 +23,15 @@ func NewRouter(taskStore repository.TaskStore) *gin.Engine {
 
 	h := NewTaskHandler(taskStore, service.RealClock{})
 
+	const taskByIDPath = "/tasks/:id"
+
 	api := r.Group("/api")
 	{
 		api.GET("/tasks", h.List)
-		api.GET("/tasks/:id", h.Get)
+		api.GET(taskByIDPath, h.Get)
 		api.POST("/tasks", h.Create)
-		api.PUT("/tasks/:id", h.Update)
-		api.DELETE("/tasks/:id", h.Delete)
+		api.PUT(taskByIDPath, h.Update)
+		api.DELETE(taskByIDPath, h.Delete)
 		api.GET("/insights", h.Insights)
 	}
 
