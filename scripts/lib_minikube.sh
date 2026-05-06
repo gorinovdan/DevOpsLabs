@@ -242,6 +242,8 @@ ensure_minikube_running() {
 
 ensure_host_image() {
   local image="$1"
+  local attempts="${IMAGE_PULL_ATTEMPTS:-5}"
+  local delay="${IMAGE_PULL_DELAY:-10}"
 
   require_cmd docker
 
@@ -249,8 +251,20 @@ ensure_host_image() {
     return 0
   fi
 
-  echo "Pulling image on host: ${image}"
-  docker pull "${image}"
+  local i
+  for i in $(seq 1 "${attempts}"); do
+    echo "Pulling image on host (attempt ${i}/${attempts}): ${image}"
+    if docker pull "${image}"; then
+      return 0
+    fi
+    if (( i < attempts )); then
+      echo "Pull failed, sleeping ${delay}s before retry..." >&2
+      sleep "${delay}"
+    fi
+  done
+
+  echo "Error: failed to pull ${image} after ${attempts} attempts." >&2
+  return 1
 }
 
 detect_host_arch() {
