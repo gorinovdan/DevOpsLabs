@@ -66,11 +66,33 @@ ensure_namespace() {
   fi
 }
 
+preload_argocd_images_into_minikube() {
+  if ! command -v minikube >/dev/null 2>&1; then
+    return 0
+  fi
+
+  # Some networks (corporate proxies, VPNs) block in-cluster pulls from
+  # quay.io / ghcr.io / docker.io. Pre-loading the images on the host
+  # docker daemon and then `minikube image load` works around that.
+  local images=(
+    "${ARGOCD_CORE_IMAGE:-quay.io/argoproj/argocd:${ARGOCD_VERSION}}"
+    "${ARGOCD_DEX_IMAGE:-ghcr.io/dexidp/dex:v2.41.1}"
+    "${ARGOCD_REDIS_IMAGE:-redis:7.0.15-alpine}"
+  )
+  local img
+  for img in "${images[@]}"; do
+    echo "Pre-loading Argo CD image into minikube: ${img}"
+    load_image_into_minikube "${img}"
+  done
+}
+
 install_argocd_components() {
   if kubectl -n "${ARGOCD_NAMESPACE}" get deploy argocd-server >/dev/null 2>&1; then
     echo "Argo CD already installed in namespace ${ARGOCD_NAMESPACE}, skipping bulk install."
     return 0
   fi
+
+  preload_argocd_images_into_minikube
 
   echo "Applying Argo CD manifests from ${ARGOCD_INSTALL_MANIFEST}..."
   kubectl apply -n "${ARGOCD_NAMESPACE}" -f "${ARGOCD_INSTALL_MANIFEST}"
