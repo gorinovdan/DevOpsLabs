@@ -17,6 +17,12 @@ SONARQUBE_ADMIN_PASSWORD="${SONARQUBE_ADMIN_PASSWORD:-admin}"
 SONAR_SCANNER_BIN="${SONAR_SCANNER_BIN:-sonar-scanner}"
 SONAR_SCAN_VIA_DOCKER="${SONAR_SCAN_VIA_DOCKER:-0}"
 SONAR_SCANNER_DOCKER_IMAGE="${SONAR_SCANNER_DOCKER_IMAGE:-sonarsource/sonar-scanner-cli:latest}"
+SONAR_TOKEN_FILE="${SONAR_TOKEN_FILE:-${HOME}/.flowboard-sonar-token}"
+
+# Prefer cached token from sonar_quality_gate.sh when SONARQUBE_TOKEN is empty.
+if [[ -z "${SONARQUBE_TOKEN}" && -s "${SONAR_TOKEN_FILE}" ]]; then
+  SONARQUBE_TOKEN="$(<"${SONAR_TOKEN_FILE}")"
+fi
 
 if ! command -v "${SONAR_SCANNER_BIN}" >/dev/null 2>&1 && [[ "${SONAR_SCAN_VIA_DOCKER}" != "1" ]]; then
   echo "Warning: sonar-scanner not on PATH; falling back to Docker image ${SONAR_SCANNER_DOCKER_IMAGE}." >&2
@@ -24,7 +30,9 @@ if ! command -v "${SONAR_SCANNER_BIN}" >/dev/null 2>&1 && [[ "${SONAR_SCAN_VIA_D
 fi
 
 if [[ -z "${SONARQUBE_TOKEN}" ]]; then
-  echo "SONARQUBE_TOKEN not set, falling back to admin credentials. Set SONARQUBE_TOKEN for production runs." >&2
+  echo "Error: SONARQUBE_TOKEN is not set and no cached token found at ${SONAR_TOKEN_FILE}." >&2
+  echo "Run scripts/sonar_quality_gate.sh first to provision a scanner token." >&2
+  exit 1
 fi
 
 backend_coverage="${ROOT_DIR}/backend/coverage.out"
@@ -41,13 +49,8 @@ fi
 declare -a sonar_args=(
   "-Dsonar.host.url=${SONARQUBE_URL}"
   "-Dsonar.qualitygate.wait=true"
+  "-Dsonar.token=${SONARQUBE_TOKEN}"
 )
-
-if [[ -n "${SONARQUBE_TOKEN}" ]]; then
-  sonar_args+=("-Dsonar.token=${SONARQUBE_TOKEN}")
-else
-  sonar_args+=("-Dsonar.login=${SONARQUBE_ADMIN_USER}" "-Dsonar.password=${SONARQUBE_ADMIN_PASSWORD}")
-fi
 
 if [[ -n "${GITHUB_SHA:-}" ]]; then
   sonar_args+=("-Dsonar.projectVersion=${GITHUB_SHA::8}")

@@ -19,6 +19,8 @@ SONARQUBE_ADMIN_USER="${SONARQUBE_ADMIN_USER:-admin}"
 SONARQUBE_ADMIN_PASSWORD="${SONARQUBE_ADMIN_PASSWORD:-admin}"
 PROJECT_KEY="${PROJECT_KEY:-flowboard}"
 GATE_NAME="${GATE_NAME:-FlowBoard Gate}"
+SONAR_TOKEN_FILE="${SONAR_TOKEN_FILE:-${HOME}/.flowboard-sonar-token}"
+SONAR_TOKEN_NAME="${SONAR_TOKEN_NAME:-flowboard-ci}"
 
 curl_auth() {
   if [[ -n "${SONARQUBE_TOKEN}" ]]; then
@@ -100,3 +102,45 @@ else
 fi
 
 echo "Quality gate '${GATE_NAME}' is configured."
+
+# Ensure a scanner token exists. Newer SonarQube refuses sonar.login for
+# the analysis API, so we always need a USER_TOKEN.
+ensure_scanner_token() {
+  if [[ -s "${SONAR_TOKEN_FILE}" ]]; then
+    local cached="$(<"${SONAR_TOKEN_FILE}")"
+    if [[ -n "${cached}" ]]; then
+      # Verify the cached token still works.
+      if curl -fsS --max-time 5 -u "${cached}:" "${SONARQUBE_URL}/api/authentication/validate" \
+          | grep -q '"valid":true'; then
+        echo "Cached SonarQube scanner token is still valid."
+        return 0
+      fi
+      echo "Cached SonarQube scanner token is invalid, regenerating..."
+    fi
+  fi
+
+  mkdir -p "$(dirname "${SONAR_TOKEN_FILE}")"
+
+  # Revoke any pre-existing token with the same name to avoid the "exists" error.
+  curl -sS -u "${SONARQUBE_ADMIN_USER}:${SONARQUBE_ADMIN_PASSWORD}" \
+    -X POST "${SONARQUBE_URL}/api/user_tokens/revoke" \
+    --data-urlencode "name=${SONAR_TOKEN_NAME}" >/dev/null 2>&1 || true
+
+  local resp
+  resp="$(curl -sS -u "${SONARQUBE_ADMIN_USER}:${SONARQUBE_ADMIN_PASSWORD}" \
+    -X POST "${SONARQUBE_URL}/api/user_tokens/generate" \
+    --data-urlencode "name=${SONAR_TOKEN_NAME}")"
+  local token
+  token="$(printf '%s' "${resp}" | jq -r '.token // ""')"
+
+  if [[ -z "${token}" ]]; then
+    echo "Error: failed to generate SonarQube scanner token. Response: ${resp}" >&2
+    exit 1
+  fi
+
+  printf '%s' "${token}" > "${SONAR_TOKEN_FILE}"
+  chmod 600 "${SONAR_TOKEN_FILE}"
+  echo "Generated SonarQube scanner token, cached at ${SONAR_TOKEN_FILE}."
+}
+
+ensure_scanner_token
