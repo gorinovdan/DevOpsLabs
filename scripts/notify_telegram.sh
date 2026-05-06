@@ -74,11 +74,7 @@ sha="${GITHUB_SHA:-$(git -C "${ROOT_DIR}" rev-parse HEAD 2>/dev/null || echo unk
 short_sha="${sha::7}"
 actor="${GITHUB_ACTOR:-$(git -C "${ROOT_DIR}" log -1 --pretty='%an' "${sha}" 2>/dev/null || echo '-')}"
 trigger="${GITHUB_EVENT_NAME:-manual}"
-
-commit_subject=""
-if [[ -n "${sha}" && "${sha}" != "unknown" ]]; then
-  commit_subject="$(git -C "${ROOT_DIR}" log -1 --pretty='%s' "${sha}" 2>/dev/null | head -c 100 || true)"
-fi
+workflow_name="${GITHUB_WORKFLOW:-CI/CD}"
 
 run_url=""
 if [[ -n "${GITHUB_SERVER_URL:-}" && -n "${GITHUB_RUN_ID:-}" ]]; then
@@ -88,10 +84,7 @@ fi
 # Render the metadata footer that all messages share.
 render_footer() {
   local out=""
-  if [[ -n "${commit_subject}" ]]; then
-    out+=$'\n'"📝 $(sanitize "${commit_subject}")"
-  fi
-  out+=$'\n'"🔖 <code>${short_sha}</code> · 🌿 <code>$(sanitize "${ref}")</code>"
+  out+=$'\n'"🎬 <code>$(sanitize "${workflow_name}")</code> · 🔖 <code>${short_sha}</code> · 🌿 <code>$(sanitize "${ref}")</code>"
   out+=$'\n'"👤 $(sanitize "${actor}") · ⚡ $(sanitize "${trigger}")"
   if [[ -n "${run_url}" ]]; then
     out+=$'\n'"🔗 <a href=\"${run_url}\">Open pipeline run</a>"
