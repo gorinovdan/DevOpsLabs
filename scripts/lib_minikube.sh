@@ -222,6 +222,7 @@ ensure_minikube_running() {
   local memory="${4:-6144}"
 
   if run_minikube status >/dev/null 2>&1; then
+    configure_minikube_docker_proxy || true
     return 0
   fi
 
@@ -232,12 +233,69 @@ ensure_minikube_running() {
 
   echo "Starting minikube with driver=${driver}, cpus=${cpus}, memory=${memory}..."
   if run_minikube start --driver="${driver}" --cpus="${cpus}" --memory="${memory}"; then
+    configure_minikube_docker_proxy || true
     return 0
   fi
 
   reset_minikube_profile
   echo "Retrying minikube start with a clean profile..." >&2
   run_minikube start --driver="${driver}" --cpus="${cpus}" --memory="${memory}"
+  configure_minikube_docker_proxy || true
+}
+
+# When the host is sitting behind an HTTP/SOCKS proxy on 127.0.0.1
+# (e.g. Clash / V2Ray / corp tunnel), kubelet/dockerd inside the
+# minikube node cannot reach quay.io / ghcr.io / docker.io through
+# Docker Desktop's internal DNS. We translate the host loopback proxy
+# to host.docker.internal:<port> and apply it as a systemd drop-in for
+# dockerd + cri-docker so in-cluster image pulls work.
+configure_minikube_docker_proxy() {
+  local raw_proxy="${HTTP_PROXY:-${HTTPS_PROXY:-${http_proxy:-${https_proxy:-}}}}"
+  if [[ -z "${raw_proxy}" ]]; then
+    return 0
+  fi
+
+  local proxy_url=""
+  if [[ "${raw_proxy}" == http://* || "${raw_proxy}" == https://* ]]; then
+    proxy_url="${raw_proxy}"
+  else
+    return 0
+  fi
+
+  local rewritten=""
+  rewritten="${proxy_url//127.0.0.1/host.docker.internal}"
+  rewritten="${rewritten//localhost/host.docker.internal}"
+
+  if ! command -v minikube >/dev/null 2>&1; then
+    return 0
+  fi
+
+  local marker="# managed-by: lib_minikube.sh"
+  local desired_block
+  desired_block="$(cat <<EOF
+${marker}
+[Service]
+Environment="HTTP_PROXY=${rewritten}"
+Environment="HTTPS_PROXY=${rewritten}"
+Environment="NO_PROXY=localhost,127.0.0.1,::1,192.168.49.0/24,host.docker.internal,kubernetes.default.svc,.svc,.svc.cluster.local,10.0.0.0/8,172.16.0.0/12"
+EOF
+)"
+
+  local current
+  current="$(run_minikube ssh -- "sudo cat /etc/systemd/system/docker.service.d/http-proxy.conf 2>/dev/null" 2>/dev/null || true)"
+  if [[ "${current}" == "${desired_block}"* ]]; then
+    return 0
+  fi
+
+  echo "Configuring minikube dockerd to use host proxy ${rewritten}..."
+  local b64
+  b64="$(printf '%s' "${desired_block}" | base64)"
+
+  run_minikube ssh -- "sudo mkdir -p /etc/systemd/system/docker.service.d && \
+    echo '${b64}' | base64 --decode | sudo tee /etc/systemd/system/docker.service.d/http-proxy.conf >/dev/null && \
+    sudo systemctl daemon-reload && \
+    sudo systemctl restart docker && \
+    sudo systemctl restart cri-docker.service" >/dev/null
 }
 
 ensure_host_image() {
