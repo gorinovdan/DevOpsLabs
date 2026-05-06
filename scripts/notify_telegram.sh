@@ -13,22 +13,19 @@ set -euo pipefail
 #   TELEGRAM_NOTIFY_DISABLE=1 - skip sending entirely (useful in dry-runs).
 #
 # Usage:
-#   notify_telegram.sh <event> <status> [message...]
+#   notify_telegram.sh <event> <status> [extra...]
 #
-# Example:
-#   TELEGRAM_BOT_TOKEN=... ./scripts/notify_telegram.sh sonar-scan success "coverage 99.6%"
+# Special events:
+#   pipeline / started|queued     - "pipeline launched" message.
+#   pipeline / <overall> + extra  - if extra contains "k=v;k=v..." it is
+#                                   rendered as a per-job summary table.
+#   <anything else>               - per-job notification.
 #
-# Recipients are discovered automatically:
-#   1. We call getUpdates to learn every chat that messaged the bot
-#      since the last few days.
-#   2. Each unique chat id is appended to TELEGRAM_CHATS_FILE so the
-#      list grows over time even if Telegram's 24h getUpdates window
-#      forgets old chats.
-#   3. The notification is broadcast to every id in the merged set.
-#
-# To start receiving notifications a user (or admin of a group/channel)
-# only needs to send any message to the bot once.
+# Recipients are discovered automatically via getUpdates and cached in
+# TELEGRAM_CHATS_FILE so the broadcast list grows over time. To start
+# receiving notifications, send any message to the bot once.
 
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 TELEGRAM_BOT_TOKEN="${TELEGRAM_BOT_TOKEN:-}"
 TELEGRAM_API="${TELEGRAM_API:-https://api.telegram.org}"
 TELEGRAM_NOTIFY_DISABLE="${TELEGRAM_NOTIFY_DISABLE:-0}"
@@ -54,40 +51,133 @@ status="${2:?missing status}"
 shift 2 || true
 extra_message="$*"
 
-case "${status,,}" in
-  success|ok|passed) icon="✅" ;;
-  failure|failed|error) icon="❌" ;;
-  cancelled|skipped) icon="⚠️" ;;
-  started|running|in_progress) icon="🔄" ;;
-  *) icon="ℹ️" ;;
-esac
+status_icon() {
+  case "${1,,}" in
+    success|ok|passed)         echo "✅" ;;
+    failure|failed|error)      echo "❌" ;;
+    cancelled)                 echo "🟥" ;;
+    skipped)                   echo "⚪️" ;;
+    started|running|in_progress|queued|pending) echo "🟡" ;;
+    *)                         echo "ℹ️" ;;
+  esac
+}
 
-repo="${GITHUB_REPOSITORY:-local}"
+# Sanitise user-controlled fields for parse_mode=HTML.
+sanitize() {
+  printf '%s' "$1" | sed 's/&/\&amp;/g; s/</\&lt;/g; s/>/\&gt;/g'
+}
+
+# Pull commit metadata from the locally checked out repo.
+repo="${GITHUB_REPOSITORY:-flowboard}"
 ref="${GITHUB_REF_NAME:-${GITHUB_REF:-local}}"
-sha="${GITHUB_SHA:-$(git -C "$(dirname "${BASH_SOURCE[0]}")/.." rev-parse --short HEAD 2>/dev/null || echo unknown)}"
+sha="${GITHUB_SHA:-$(git -C "${ROOT_DIR}" rev-parse HEAD 2>/dev/null || echo unknown)}"
 short_sha="${sha::7}"
+actor="${GITHUB_ACTOR:-$(git -C "${ROOT_DIR}" log -1 --pretty='%an' "${sha}" 2>/dev/null || echo '-')}"
+trigger="${GITHUB_EVENT_NAME:-manual}"
+
+commit_subject=""
+if [[ -n "${sha}" && "${sha}" != "unknown" ]]; then
+  commit_subject="$(git -C "${ROOT_DIR}" log -1 --pretty='%s' "${sha}" 2>/dev/null | head -c 100 || true)"
+fi
+
 run_url=""
 if [[ -n "${GITHUB_SERVER_URL:-}" && -n "${GITHUB_RUN_ID:-}" ]]; then
   run_url="${GITHUB_SERVER_URL}/${repo}/actions/runs/${GITHUB_RUN_ID}"
 fi
 
-# Build the message text. HTML special chars in user-controlled fields
-# are stripped to keep parse_mode=HTML safe.
-sanitize() {
-  printf '%s' "$1" | sed 's/[<>&]/ /g'
+# Render the metadata footer that all messages share.
+render_footer() {
+  local out=""
+  if [[ -n "${commit_subject}" ]]; then
+    out+=$'\n'"📝 $(sanitize "${commit_subject}")"
+  fi
+  out+=$'\n'"🔖 <code>${short_sha}</code> · 🌿 <code>$(sanitize "${ref}")</code>"
+  out+=$'\n'"👤 $(sanitize "${actor}") · ⚡ $(sanitize "${trigger}")"
+  if [[ -n "${run_url}" ]]; then
+    out+=$'\n'"🔗 <a href=\"${run_url}\">Open pipeline run</a>"
+  fi
+  printf '%s' "${out}"
 }
 
-text="${icon} <b>FlowBoard CI/CD</b>"
-text+=$'\n'"<b>Event:</b> $(sanitize "${event}")"
-text+=$'\n'"<b>Status:</b> $(sanitize "${status}")"
-text+=$'\n'"<b>Repo:</b> $(sanitize "${repo}")"
-text+=$'\n'"<b>Ref:</b> $(sanitize "${ref}")"
-text+=$'\n'"<b>Commit:</b> <code>${short_sha}</code>"
-if [[ -n "${run_url}" ]]; then
-  text+=$'\n'"<a href=\"${run_url}\">View pipeline run</a>"
-fi
-if [[ -n "${extra_message}" ]]; then
-  text+=$'\n\n'"$(sanitize "${extra_message}")"
+render_pipeline_start() {
+  local text="🚀 <b>FlowBoard CI/CD</b> — <i>started</i>"
+  text+="$(render_footer)"
+  printf '%s' "${text}"
+}
+
+render_pipeline_summary() {
+  local overall_icon
+  overall_icon="$(status_icon "${status}")"
+
+  local title
+  case "${status,,}" in
+    success) title="<i>all green</i>" ;;
+    failure) title="<i>some jobs failed</i>" ;;
+    cancelled) title="<i>cancelled</i>" ;;
+    *) title="<i>$(sanitize "${status}")</i>" ;;
+  esac
+
+  local text="${overall_icon} <b>FlowBoard CI/CD</b> — ${title}"
+
+  # Parse "key=value;key=value" pairs from extra_message into a vertical table.
+  if [[ -n "${extra_message}" && "${extra_message}" == *"="* ]]; then
+    text+=$'\n\n<pre>'
+    local pair name value icon name_padded
+    while IFS=';' read -ra pairs <<< "${extra_message//;/$'\n;'}"; do
+      :  # noop; we read in a different way below
+      break
+    done
+
+    # Re-split on ";" producing lines.
+    local raw="${extra_message}"
+    while [[ -n "${raw}" ]]; do
+      if [[ "${raw}" == *";"* ]]; then
+        pair="${raw%%;*}"
+        raw="${raw#*;}"
+      else
+        pair="${raw}"
+        raw=""
+      fi
+      pair="${pair## }"
+      pair="${pair%% }"
+      [[ -z "${pair}" || "${pair}" != *"="* ]] && continue
+      name="${pair%%=*}"
+      value="${pair#*=}"
+      icon="$(status_icon "${value}")"
+      printf -v name_padded "%-22s" "${name}"
+      text+=$'\n'"${icon}  ${name_padded}$(sanitize "${value}")"
+    done
+    text+=$'\n</pre>'
+  fi
+
+  text+="$(render_footer)"
+  printf '%s' "${text}"
+}
+
+render_single_job() {
+  local icon
+  icon="$(status_icon "${status}")"
+
+  local job_name
+  job_name="$(sanitize "${event}")"
+  local status_label
+  status_label="$(sanitize "${status}")"
+
+  local text="${icon} <b>${job_name}</b> — <i>${status_label}</i>"
+  if [[ -n "${extra_message}" ]]; then
+    text+=$'\n\n'"$(sanitize "${extra_message}")"
+  fi
+  text+="$(render_footer)"
+  printf '%s' "${text}"
+}
+
+# Decide which template to use.
+if [[ "${event,,}" == "pipeline" && ( "${status,,}" == "started" || "${status,,}" == "queued" ) ]]; then
+  message_text="$(render_pipeline_start)"
+elif [[ "${event,,}" == "pipeline" && "${extra_message}" == *"="* ]]; then
+  message_text="$(render_pipeline_summary)"
+else
+  message_text="$(render_single_job)"
 fi
 
 mkdir -p "$(dirname "${TELEGRAM_CHATS_FILE}")"
@@ -137,7 +227,7 @@ while IFS= read -r chat_id; do
   http_code="$(curl -sS -o /tmp/telegram_response.json -w '%{http_code}' \
     -X POST "${TELEGRAM_API}/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
     --data-urlencode "chat_id=${chat_id}" \
-    --data-urlencode "text=${text}" \
+    --data-urlencode "text=${message_text}" \
     --data-urlencode "parse_mode=HTML" \
     --data-urlencode "disable_web_page_preview=true" \
     || echo "000")"
