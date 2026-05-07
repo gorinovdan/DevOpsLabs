@@ -120,26 +120,54 @@ install_argocd_components() {
 }
 
 patch_argocd_image_pull_policy() {
-  echo "Setting imagePullPolicy=IfNotPresent on Argo CD workloads..."
-  local d
+  local d current
+  local need_patch=0
   for d in argocd-server argocd-repo-server argocd-applicationset-controller \
            argocd-notifications-controller argocd-dex-server; do
-    if kubectl -n "${ARGOCD_NAMESPACE}" get deploy "${d}" >/dev/null 2>&1; then
-      kubectl -n "${ARGOCD_NAMESPACE}" patch deploy "${d}" --type=json \
+    current="$(kubectl -n "${ARGOCD_NAMESPACE}" get deploy "${d}" \
+      -o jsonpath='{.spec.template.spec.containers[0].imagePullPolicy}' 2>/dev/null || true)"
+    if [[ -n "${current}" && "${current}" != "IfNotPresent" ]]; then
+      need_patch=1
+      break
+    fi
+  done
+  if [[ "${need_patch}" == "0" ]]; then
+    current="$(kubectl -n "${ARGOCD_NAMESPACE}" get statefulset argocd-application-controller \
+      -o jsonpath='{.spec.template.spec.containers[0].imagePullPolicy}' 2>/dev/null || true)"
+    if [[ -n "${current}" && "${current}" != "IfNotPresent" ]]; then
+      need_patch=1
+    fi
+  fi
+
+  if [[ "${need_patch}" == "0" ]]; then
+    echo "Argo CD workloads already have imagePullPolicy=IfNotPresent, skipping patch."
+  else
+    echo "Setting imagePullPolicy=IfNotPresent on Argo CD workloads..."
+    for d in argocd-server argocd-repo-server argocd-applicationset-controller \
+             argocd-notifications-controller argocd-dex-server; do
+      if kubectl -n "${ARGOCD_NAMESPACE}" get deploy "${d}" >/dev/null 2>&1; then
+        kubectl -n "${ARGOCD_NAMESPACE}" patch deploy "${d}" --type=json \
+          -p='[{"op":"replace","path":"/spec/template/spec/containers/0/imagePullPolicy","value":"IfNotPresent"}]' \
+          >/dev/null 2>&1 || true
+      fi
+    done
+    if kubectl -n "${ARGOCD_NAMESPACE}" get statefulset argocd-application-controller >/dev/null 2>&1; then
+      kubectl -n "${ARGOCD_NAMESPACE}" patch statefulset argocd-application-controller --type=json \
         -p='[{"op":"replace","path":"/spec/template/spec/containers/0/imagePullPolicy","value":"IfNotPresent"}]' \
         >/dev/null 2>&1 || true
     fi
-  done
-  if kubectl -n "${ARGOCD_NAMESPACE}" get statefulset argocd-application-controller >/dev/null 2>&1; then
-    kubectl -n "${ARGOCD_NAMESPACE}" patch statefulset argocd-application-controller --type=json \
-      -p='[{"op":"replace","path":"/spec/template/spec/containers/0/imagePullPolicy","value":"IfNotPresent"}]' \
-      >/dev/null 2>&1 || true
   fi
+
   # Pods already in ImagePullBackOff retain the old policy in their spec.
   # Force-delete them so the new ReplicaSet uses the patched template.
-  kubectl -n "${ARGOCD_NAMESPACE}" get pods --no-headers 2>/dev/null \
-    | awk '$3 ~ /ImagePullBackOff|ErrImagePull/ {print $1}' \
-    | xargs -r -n 1 kubectl -n "${ARGOCD_NAMESPACE}" delete pod --grace-period=0 --force --wait=false >/dev/null 2>&1 || true
+  # When the cluster is healthy this matches zero pods and is a no-op.
+  local stuck
+  stuck="$(kubectl -n "${ARGOCD_NAMESPACE}" get pods --no-headers 2>/dev/null \
+    | awk '$3 ~ /ImagePullBackOff|ErrImagePull/ {print $1}')"
+  if [[ -n "${stuck}" ]]; then
+    echo "Force-deleting stuck pods: ${stuck}"
+    printf '%s\n' "${stuck}" | xargs -n 1 kubectl -n "${ARGOCD_NAMESPACE}" delete pod --grace-period=0 --force --wait=false >/dev/null 2>&1 || true
+  fi
 }
 
 # Argo CD's repo-server pod clones the application's git repo. On a
@@ -190,13 +218,23 @@ configure_insecure_server() {
     return 0
   fi
 
+  # Read current configmap; only patch + restart workloads when something
+  # actually changes. Re-running install on a fully-configured cluster
+  # was firing two sequential rollouts (argocd-server, app-controller)
+  # adding ~60s for nothing.
+  local current insecure srv_timeout ctrl_timeout
+  current="$(kubectl -n "${ARGOCD_NAMESPACE}" get configmap argocd-cmd-params-cm -o json 2>/dev/null || echo '{}')"
+  insecure="$(printf '%s' "${current}" | jq -r '.data["server.insecure"] // ""')"
+  srv_timeout="$(printf '%s' "${current}" | jq -r '.data["server.repo.server.timeout.seconds"] // ""')"
+  ctrl_timeout="$(printf '%s' "${current}" | jq -r '.data["controller.repo.server.timeout.seconds"] // ""')"
+  if [[ "${insecure}" == "true" && "${srv_timeout}" == "300" && "${ctrl_timeout}" == "300" ]]; then
+    echo "Argo CD argocd-cmd-params-cm already configured, skipping restart."
+    return 0
+  fi
+
   echo "Configuring argocd-server (insecure HTTP + 300s repo-server timeout)..."
   # The default 60s deadline on argocd-server -> argocd-repo-server RPC is
-  # too tight for our usage: every `argocd app set --kustomize-image` builds
-  # a unique cache key (image SHA in the source spec), so the first call
-  # after a deployment has to do a cold `kustomize build` over a freshly
-  # cloned repo through the host proxy. That render routinely takes 60-90s
-  # and trips the deadline. 300s leaves enough headroom.
+  # too tight for cold renders that take 60-90s. 300s leaves headroom.
   kubectl -n "${ARGOCD_NAMESPACE}" patch configmap argocd-cmd-params-cm \
     --type merge \
     -p '{"data":{"server.insecure":"true","server.repo.server.timeout.seconds":"300","controller.repo.server.timeout.seconds":"300"}}'

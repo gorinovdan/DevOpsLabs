@@ -620,8 +620,13 @@ wait_for_http_endpoint() {
 
   require_cmd curl
 
+  # 2s curl timeout (down from 5s) keeps the polling loop tight: when the
+  # endpoint is briefly unreachable (port-forward reconnecting, pod
+  # restarting, etc.) we want to retry sooner rather than burn 5s+1s per
+  # iteration. With the typical "wait until Ready" use case, the endpoint
+  # responds in <100ms once it's actually up.
   for _ in $(seq 1 "${attempts}"); do
-    if curl -fsS --max-time 5 "${url}" >/dev/null 2>&1; then
+    if curl -fsS --max-time 2 "${url}" >/dev/null 2>&1; then
       return 0
     fi
     sleep 1

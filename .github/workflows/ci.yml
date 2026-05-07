@@ -233,23 +233,24 @@ jobs:
           # routinely takes 3-5 minutes on a 4-core minikube.
           kubectl -n sonarqube rollout status deploy/sonarqube --timeout=600s
 
-      - name: Port-forward SonarQube to 127.0.0.1:19000
-        run: |
-          source scripts/lib_minikube.sh
-          ensure_port_forward "sonarqube" "sonarqube" "sonarqube" "19000" "9000" "/api/system/status"
-
-      - name: Wait for SonarQube to report status=UP
+      - name: Port-forward SonarQube and wait for status=UP
         env:
           SONARQUBE_URL: "http://127.0.0.1:19000"
-          SONARQUBE_READY_TIMEOUT: "600"
+          SONARQUBE_READY_TIMEOUT: "300"
         run: |
+          source scripts/lib_minikube.sh
+          # Skip ensure_port_forward's internal health probe — sonar's
+          # readinessProbe already passed (Deploy step's rollout-status
+          # required it), and sonar may still flap during minikube docker
+          # hiccups. Validate via the tight loop below instead.
+          ensure_port_forward "sonarqube" "sonarqube" "sonarqube" "19000" "9000"
           deadline=$(( $(date +%s) + SONARQUBE_READY_TIMEOUT ))
           while [[ $(date +%s) -lt ${deadline} ]]; do
-            if curl -fsS --max-time 5 "${SONARQUBE_URL}/api/system/status" | grep -q '"status":"UP"'; then
+            if curl -fsS --max-time 2 "${SONARQUBE_URL}/api/system/status" 2>/dev/null | grep -q '"status":"UP"'; then
               echo "SonarQube is UP at ${SONARQUBE_URL}"
               exit 0
             fi
-            sleep 5
+            sleep 1
           done
           echo "Error: SonarQube did not become UP within ${SONARQUBE_READY_TIMEOUT}s." >&2
           kubectl -n sonarqube logs deploy/sonarqube --tail=80 || true
