@@ -239,16 +239,25 @@ jobs:
           SONARQUBE_READY_TIMEOUT: "300"
         run: |
           source scripts/lib_minikube.sh
-          # Skip ensure_port_forward's internal health probe — sonar's
-          # readinessProbe already passed (Deploy step's rollout-status
-          # required it), and sonar may still flap during minikube docker
-          # hiccups. Validate via the tight loop below instead.
+          # Resilient probe loop: kubectl port-forward periodically loses
+          # the SPDY tunnel when the sonarqube pod restarts (minikube
+          # docker hiccups). Detect a dead listener / broken tunnel and
+          # respawn the port-forward inside the loop instead of giving up.
           ensure_port_forward "sonarqube" "sonarqube" "sonarqube" "19000" "9000"
           deadline=$(( $(date +%s) + SONARQUBE_READY_TIMEOUT ))
+          fail_streak=0
           while [[ $(date +%s) -lt ${deadline} ]]; do
             if curl -fsS --max-time 2 "${SONARQUBE_URL}/api/system/status" 2>/dev/null | grep -q '"status":"UP"'; then
               echo "SonarQube is UP at ${SONARQUBE_URL}"
               exit 0
+            fi
+            fail_streak=$((fail_streak + 1))
+            # 5 failed probes (~5-10s of dead tunnel) → respawn port-forward.
+            if (( fail_streak >= 5 )); then
+              echo "Probe stuck; respawning port-forward..."
+              stop_port_forward "sonarqube" "sonarqube" "sonarqube" 19000 9000 || true
+              ensure_port_forward "sonarqube" "sonarqube" "sonarqube" "19000" "9000" || true
+              fail_streak=0
             fi
             sleep 1
           done
