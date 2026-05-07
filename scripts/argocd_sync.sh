@@ -65,11 +65,40 @@ trap restore_namespace EXIT
 # proxy so argocd does not tunnel cluster API calls through it.
 unset HTTP_PROXY HTTPS_PROXY ALL_PROXY http_proxy https_proxy all_proxy
 
+# Warm up the repo-server's manifest cache before the timed `app set` call.
+# A cold `kustomize build` inside the repo-server pod runs in ~60-90s right
+# after a fresh rollout (git clone over the host proxy + first kustomize
+# render), and the controller's RPC deadline to repo-server is 60s by
+# default — so the *first* `app set` reliably fails with DeadlineExceeded.
+# A bare `app get --refresh` triggers the same render path with no deadline
+# wired up to the CLI, populating the cache so the subsequent `app set`
+# returns in <1s.
+echo "Warming up Argo CD repo-server manifest cache for '${APP_NAME}'..."
+for attempt in 1 2 3; do
+  if "${ARGOCD_BIN}" app get "${APP_NAME}" "${ARGO_FLAGS[@]}" --refresh >/dev/null 2>&1; then
+    echo "  cache warmed (attempt ${attempt})"
+    break
+  fi
+  echo "  refresh attempt ${attempt} failed, retrying in 10s..."
+  sleep 10
+done
+
 echo "Updating image overrides on Argo CD Application '${APP_NAME}'..."
-"${ARGOCD_BIN}" app set "${APP_NAME}" \
-  "${ARGO_FLAGS[@]}" \
-  --kustomize-image "ghcr.io/gorinovdan/devopslabs/backend=${BACKEND_IMAGE}" \
-  --kustomize-image "ghcr.io/gorinovdan/devopslabs/frontend=${FRONTEND_IMAGE}"
+set_attempts=3
+for attempt in $(seq 1 "${set_attempts}"); do
+  if "${ARGOCD_BIN}" app set "${APP_NAME}" \
+       "${ARGO_FLAGS[@]}" \
+       --kustomize-image "ghcr.io/gorinovdan/devopslabs/backend=${BACKEND_IMAGE}" \
+       --kustomize-image "ghcr.io/gorinovdan/devopslabs/frontend=${FRONTEND_IMAGE}"; then
+    break
+  fi
+  if [[ "${attempt}" -eq "${set_attempts}" ]]; then
+    echo "Error: 'argocd app set' failed after ${set_attempts} attempts." >&2
+    exit 1
+  fi
+  echo "  app set attempt ${attempt} failed, retrying in 15s..."
+  sleep 15
+done
 
 echo "Triggering Argo CD sync for '${APP_NAME}'..."
 "${ARGOCD_BIN}" app sync "${APP_NAME}" \
