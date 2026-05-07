@@ -480,10 +480,27 @@ jobs:
       - name: Re-establish app port-forwards
         run: |
           source scripts/lib_minikube.sh
-          ensure_port_forward "frontend"   "flowboard"  "frontend"   "18081" "80"   "/"
-          ensure_port_forward "backend"    "flowboard"  "backend"    "18080" "8080" "/health"
-          ensure_port_forward "grafana"    "monitoring" "grafana"    "13000" "80"   "/api/health"
-          ensure_port_forward "prometheus" "monitoring" "prometheus" "19090" "9090" "/-/healthy"
+          ensure_port_forward "frontend"   "flowboard"  "frontend"      "18081" "80"   "/"
+          ensure_port_forward "backend"    "flowboard"  "backend"       "18080" "8080" "/health"
+          ensure_port_forward "grafana"    "monitoring" "grafana"       "13000" "80"   "/api/health"
+          ensure_port_forward "prometheus" "monitoring" "prometheus"    "19090" "9090" "/-/healthy"
+          ensure_port_forward "argocd"     "argocd"     "argocd-server" "18083" "80"   "/"
+          ensure_kubectl_proxy 18001
+
+      - name: Print URLs
+        run: |
+          echo "====== FlowBoard URLs (persistent after CI/CD) ======"
+          echo "  Frontend     : http://127.0.0.1:18081"
+          echo "  Backend API  : http://127.0.0.1:18080/health"
+          echo "  Grafana      : http://127.0.0.1:13000"
+          echo "  Prometheus   : http://127.0.0.1:19090"
+          echo "  Argo CD UI   : http://127.0.0.1:18083"
+          echo "  K8s Dashboard: http://127.0.0.1:18001/api/v1/namespaces/kubernetes-dashboard/services/http:kubernetes-dashboard:/proxy/"
+          echo "======================================================"
+          echo "Argo CD admin password:"
+          kubectl -n argocd get secret argocd-initial-admin-secret \
+            -o jsonpath='{.data.password}' | base64 -d || true
+          echo
 
       - name: Smoke test via frontend reverse proxy
         env:

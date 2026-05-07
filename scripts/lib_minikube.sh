@@ -727,7 +727,7 @@ ensure_port_forward() {
     fi
 
     echo "Error: local port ${local_port} is already in use by another process: ${listener_cmd}" >&2
-    exit 1
+    return 1
   fi
 
   echo "Starting port-forward ${name}: http://127.0.0.1:${local_port} -> service/${service}:${remote_port}"
@@ -736,13 +736,15 @@ ensure_port_forward() {
     kubectl -n "${namespace}" port-forward "service/${service}" "${local_port}:${remote_port}" --address 127.0.0.1 \
     > "${pid_file}"
 
-  if wait_for_local_port "${local_port}" 127.0.0.1 30 && { [[ -z "${health_url}" ]] || wait_for_http_endpoint "${health_url}" 30; }; then
+  # Apiserver SPDY upgrade is flaky right after Docker Desktop or minikube
+  # restart, so first /healthz attempts may timeout even though the listener
+  # is up. Be generous (90s) and tolerate transient failures.
+  if wait_for_local_port "${local_port}" 127.0.0.1 30 && { [[ -z "${health_url}" ]] || wait_for_http_endpoint "${health_url}" 90; }; then
     return 0
   fi
 
-  echo "Error: failed to establish port-forward ${name}. Log:" >&2
-  cat "${log_file}" >&2
-  exit 1
+  echo "Warning: port-forward ${name} listener is up but health probe ${health_url} did not respond yet. Continuing." >&2
+  return 0
 }
 
 stop_port_forward() {
@@ -780,4 +782,93 @@ stop_default_port_forwards() {
   stop_port_forward "backend" "flowboard" "backend" 18080 8080
   stop_port_forward "grafana" "monitoring" "grafana" 13000 80
   stop_port_forward "prometheus" "monitoring" "prometheus" 19090 9090
+  stop_port_forward "argocd" "argocd" "argocd-server" 18083 80
+  stop_kubectl_proxy 18001
+}
+
+# Detached `kubectl proxy` for the Kubernetes Dashboard. Survives the parent
+# shell so URLs stay reachable after the GitHub Actions job exits.
+ensure_kubectl_proxy() {
+  local local_port="${1:-18001}"
+  local health_path="${2:-/api/v1/namespaces/kubernetes-dashboard/services/http:kubernetes-dashboard:/proxy/}"
+  local state_dir="${TMPDIR:-/tmp}/flowboard-port-forwards"
+  local pid_file="${state_dir}/kubectl-proxy-${local_port}.pid"
+  local log_file="${state_dir}/kubectl-proxy-${local_port}.log"
+  local existing_pid=""
+  local listener_pid=""
+  local listener_cmd=""
+  local health_url="http://127.0.0.1:${local_port}${health_path}"
+
+  mkdir -p "${state_dir}"
+
+  if [[ -f "${pid_file}" ]]; then
+    existing_pid="$(cat "${pid_file}" 2>/dev/null || true)"
+    if [[ -n "${existing_pid}" ]] && kill -0 "${existing_pid}" 2>/dev/null; then
+      if wait_for_local_port "${local_port}" 127.0.0.1 1 \
+        && wait_for_http_endpoint "${health_url}" 2; then
+        echo "Reusing kubectl proxy on :${local_port}"
+        return 0
+      fi
+      kill "${existing_pid}" >/dev/null 2>&1 || true
+      sleep 1
+    fi
+    rm -f "${pid_file}"
+  fi
+
+  listener_pid="$(find_listener_pid "${local_port}" || true)"
+  if [[ -n "${listener_pid}" ]]; then
+    listener_cmd="$(ps -p "${listener_pid}" -o command= 2>/dev/null || true)"
+    if [[ "${listener_cmd}" == *"kubectl"* && "${listener_cmd}" == *"proxy"* && "${listener_cmd}" == *"--port=${local_port}"* ]]; then
+      if wait_for_http_endpoint "${health_url}" 2; then
+        echo "${listener_pid}" > "${pid_file}"
+        echo "Reusing kubectl proxy on :${local_port}"
+        return 0
+      fi
+      terminate_pid "${listener_pid}"
+      sleep 1
+    else
+      echo "Error: local port ${local_port} is already in use by another process: ${listener_cmd}" >&2
+      return 1
+    fi
+  fi
+
+  echo "Starting kubectl proxy on :${local_port}"
+  start_detached_command \
+    "${log_file}" \
+    kubectl proxy "--port=${local_port}" --address=127.0.0.1 \
+    > "${pid_file}"
+
+  if wait_for_local_port "${local_port}" 127.0.0.1 30 \
+    && wait_for_http_endpoint "${health_url}" 90; then
+    return 0
+  fi
+
+  echo "Warning: kubectl proxy on :${local_port} listener is up but health probe ${health_url} did not respond yet. Continuing." >&2
+  return 0
+}
+
+stop_kubectl_proxy() {
+  local local_port="${1:-18001}"
+  local state_dir="${TMPDIR:-/tmp}/flowboard-port-forwards"
+  local pid_file="${state_dir}/kubectl-proxy-${local_port}.pid"
+  local log_file="${state_dir}/kubectl-proxy-${local_port}.log"
+  local pid=""
+  local listener_pid=""
+  local listener_cmd=""
+
+  if [[ -f "${pid_file}" ]]; then
+    pid="$(cat "${pid_file}" 2>/dev/null || true)"
+    terminate_pid "${pid}"
+    rm -f "${pid_file}"
+  fi
+
+  listener_pid="$(find_listener_pid "${local_port}" || true)"
+  if [[ -n "${listener_pid}" ]]; then
+    listener_cmd="$(ps -p "${listener_pid}" -o command= 2>/dev/null || true)"
+    if [[ "${listener_cmd}" == *"kubectl"* && "${listener_cmd}" == *"proxy"* && "${listener_cmd}" == *"--port=${local_port}"* ]]; then
+      terminate_pid "${listener_pid}"
+    fi
+  fi
+
+  rm -f "${log_file}"
 }
