@@ -60,10 +60,19 @@ ensure_argocd_cli() {
 }
 
 ensure_namespace() {
-  if ! kubectl get namespace "${ARGOCD_NAMESPACE}" >/dev/null 2>&1; then
-    echo "Creating namespace ${ARGOCD_NAMESPACE}..."
-    kubectl create namespace "${ARGOCD_NAMESPACE}"
-  fi
+  # Idempotent: kubectl apply against a synthesized Namespace manifest is
+  # safe whether or not it exists, and survives the transient apiserver
+  # EOFs the docker-driver minikube emits during cluster restarts.
+  for attempt in 1 2 3; do
+    if kubectl create namespace "${ARGOCD_NAMESPACE}" --dry-run=client -o yaml \
+         | kubectl apply -f - >/dev/null 2>&1; then
+      return 0
+    fi
+    echo "ensure_namespace: apiserver hiccup, retrying in 5s (attempt ${attempt}/3)..." >&2
+    sleep 5
+  done
+  echo "Error: could not create/verify namespace ${ARGOCD_NAMESPACE}" >&2
+  return 1
 }
 
 preload_argocd_images_into_minikube() {
