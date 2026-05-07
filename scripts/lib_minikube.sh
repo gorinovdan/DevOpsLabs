@@ -8,6 +8,30 @@ require_cmd() {
   fi
 }
 
+# Run a kubectl command with retry on transient apiserver errors.
+# minikube's docker-driver apiserver intermittently emits EOF on
+# openapi/v2 schema fetches and similar control-plane calls; bare
+# `kubectl apply` then fails the whole CI step. Use this helper for any
+# kubectl invocation that touches openapi or whose target object may be
+# created/updated mid-flap.
+#
+# Usage: kubectl_retry <attempts> -- kubectl <args...>
+kubectl_retry() {
+  local attempts="${1}"; shift
+  if [[ "${1:-}" == "--" ]]; then shift; fi
+  local attempt
+  for attempt in $(seq 1 "${attempts}"); do
+    if "$@"; then
+      return 0
+    fi
+    if [[ "${attempt}" -eq "${attempts}" ]]; then
+      return 1
+    fi
+    echo "kubectl_retry: attempt ${attempt}/${attempts} failed (likely apiserver hiccup), sleeping 5s..." >&2
+    sleep 5
+  done
+}
+
 proxy_targets_loopback() {
   local proxy_value="$1"
   local proxy_host=""

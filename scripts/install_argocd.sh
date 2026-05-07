@@ -114,7 +114,7 @@ install_argocd_components() {
 
   if ! kubectl -n "${ARGOCD_NAMESPACE}" get deploy argocd-server >/dev/null 2>&1; then
     echo "Applying Argo CD manifests from ${ARGOCD_INSTALL_MANIFEST}..."
-    kubectl apply -n "${ARGOCD_NAMESPACE}" -f "${ARGOCD_INSTALL_MANIFEST}"
+    kubectl_retry 3 -- kubectl apply -n "${ARGOCD_NAMESPACE}" -f "${ARGOCD_INSTALL_MANIFEST}"
     configure_argocd_workloads_proxy
   else
     echo "Argo CD already installed in namespace ${ARGOCD_NAMESPACE}, skipping bulk install."
@@ -254,12 +254,12 @@ configure_insecure_server() {
 
 apply_bootstrap_manifests() {
   echo "Applying FlowBoard AppProject..."
-  kubectl apply -f "${ARGOCD_BOOTSTRAP_DIR}/project.yaml"
+  kubectl_retry 3 -- kubectl apply -f "${ARGOCD_BOOTSTRAP_DIR}/project.yaml"
   echo "Applying FlowBoard Application..."
-  kubectl apply -f "${ARGOCD_BOOTSTRAP_DIR}/application.yaml"
+  kubectl_retry 3 -- kubectl apply -f "${ARGOCD_BOOTSTRAP_DIR}/application.yaml"
   if [[ -f "${ARGOCD_BOOTSTRAP_DIR}/application-sonarqube.yaml" ]]; then
     echo "Applying SonarQube Application..."
-    kubectl apply -f "${ARGOCD_BOOTSTRAP_DIR}/application-sonarqube.yaml"
+    kubectl_retry 3 -- kubectl apply -f "${ARGOCD_BOOTSTRAP_DIR}/application-sonarqube.yaml"
   fi
 }
 

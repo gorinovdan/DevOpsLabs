@@ -227,7 +227,8 @@ jobs:
 
       - name: Deploy SonarQube to minikube
         run: |
-          kubectl apply -k deploy/argocd/sonarqube/
+          source scripts/lib_minikube.sh
+          kubectl_retry 3 -- kubectl apply -k deploy/argocd/sonarqube/
           kubectl -n sonarqube rollout status deploy/sonar-postgres --timeout=300s
           # Cold start of SonarQube + embedded ES + first DB schema migration
           # routinely takes 3-5 minutes on a 4-core minikube.
