@@ -175,6 +175,10 @@ apply_bootstrap_manifests() {
   kubectl apply -f "${ARGOCD_BOOTSTRAP_DIR}/project.yaml"
   echo "Applying FlowBoard Application..."
   kubectl apply -f "${ARGOCD_BOOTSTRAP_DIR}/application.yaml"
+  if [[ -f "${ARGOCD_BOOTSTRAP_DIR}/application-sonarqube.yaml" ]]; then
+    echo "Applying SonarQube Application..."
+    kubectl apply -f "${ARGOCD_BOOTSTRAP_DIR}/application-sonarqube.yaml"
+  fi
 }
 
 setup_local_port_forward() {

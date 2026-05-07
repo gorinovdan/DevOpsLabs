@@ -1,7 +1,7 @@
 apiVersion: argoproj.io/v1alpha1
 kind: Application
 metadata:
-  name: flowboard
+  name: sonarqube
   namespace: argocd
   finalizers:
     - resources-finalizer.argocd.argoproj.io
@@ -10,10 +10,10 @@ spec:
   source:
     repoURL: https://github.com/gorinovdan/DevOpsLabs.git
     targetRevision: main
-    path: deploy/argocd/app
+    path: deploy/argocd/sonarqube
   destination:
     server: https://kubernetes.default.svc
-    namespace: flowboard
+    namespace: sonarqube
   syncPolicy:
     automated:
       prune: true
@@ -30,10 +30,10 @@ spec:
         duration: 10s
         factor: 2
         maxDuration: 3m
-  # Argo CD's spec-equality comparator otherwise reports Deployment/Service as
-  # OutOfSync forever because the apiserver dehydrates the manifest with these
-  # default fields on apply, which the rendered manifest doesn't carry.
   ignoreDifferences:
+    # apiserver fills these in for any Deployment/StatefulSet that omits them.
+    # Without ignoring them, Argo CD reports OutOfSync forever even though
+    # `kubectl apply` is a no-op.
     - group: apps
       kind: Deployment
       jsonPointers:
@@ -44,11 +44,6 @@ spec:
     - group: apps
       kind: ReplicaSet
       jsonPointers:
-        - /status/terminatingReplicas
-    - group: apps
-      kind: StatefulSet
-      jsonPointers:
-        - /spec/revisionHistoryLimit
         - /status/terminatingReplicas
     - group: ""
       kind: Service

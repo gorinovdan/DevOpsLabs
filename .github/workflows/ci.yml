@@ -213,16 +213,51 @@ jobs:
           test -s backend/test-report.json
           test -s frontend/coverage/lcov.info
 
-      - name: Start SonarQube (idempotent)
+      - name: Ensure minikube is running
+        run: |
+          source scripts/lib_minikube.sh
+          ensure_minikube_running "1" "docker" "4" "6144"
+
+      - name: Pre-load SonarQube images into minikube
+        run: |
+          source scripts/lib_minikube.sh
+          load_image_into_minikube "sonarqube:26.4.0.121862-community"
+          load_image_into_minikube "postgres:16-alpine"
+          load_image_into_minikube "busybox:1.36"
+
+      - name: Deploy SonarQube to minikube
+        run: |
+          kubectl apply -k deploy/argocd/sonarqube/
+          kubectl -n sonarqube rollout status deploy/sonar-postgres --timeout=300s
+          # Cold start of SonarQube + embedded ES + first DB schema migration
+          # routinely takes 3-5 minutes on a 4-core minikube.
+          kubectl -n sonarqube rollout status deploy/sonarqube --timeout=600s
+
+      - name: Port-forward SonarQube to 127.0.0.1:19000
+        run: |
+          source scripts/lib_minikube.sh
+          ensure_port_forward "sonarqube" "sonarqube" "sonarqube" "19000" "9000" "/api/system/status"
+
+      - name: Wait for SonarQube to report status=UP
         env:
-          SONARQUBE_MODE: ${{ vars.SONARQUBE_MODE || 'native' }}
-          SONARQUBE_HOME: ${{ vars.SONARQUBE_HOME || '/Users/lasat/Downloads/sonarqube-26.4.0.121862' }}
-          SONARQUBE_URL: ${{ vars.SONARQUBE_URL || 'http://127.0.0.1:9000' }}
-        run: ./scripts/start_sonarqube.sh
+          SONARQUBE_URL: "http://127.0.0.1:19000"
+          SONARQUBE_READY_TIMEOUT: "600"
+        run: |
+          deadline=$(( $(date +%s) + SONARQUBE_READY_TIMEOUT ))
+          while [[ $(date +%s) -lt ${deadline} ]]; do
+            if curl -fsS --max-time 5 "${SONARQUBE_URL}/api/system/status" | grep -q '"status":"UP"'; then
+              echo "SonarQube is UP at ${SONARQUBE_URL}"
+              exit 0
+            fi
+            sleep 5
+          done
+          echo "Error: SonarQube did not become UP within ${SONARQUBE_READY_TIMEOUT}s." >&2
+          kubectl -n sonarqube logs deploy/sonarqube --tail=80 || true
+          exit 1
 
       - name: Configure FlowBoard quality gate (>= 80% coverage, no issues)
         env:
-          SONARQUBE_URL: ${{ vars.SONARQUBE_URL || 'http://127.0.0.1:9000' }}
+          SONARQUBE_URL: "http://127.0.0.1:19000"
           SONARQUBE_TOKEN: ${{ secrets.SONARQUBE_TOKEN }}
           SONARQUBE_ADMIN_USER: ${{ secrets.SONARQUBE_ADMIN_USER || 'admin' }}
           SONARQUBE_ADMIN_PASSWORD: ${{ secrets.SONARQUBE_ADMIN_PASSWORD || 'admin' }}
@@ -231,7 +266,7 @@ jobs:
 
       - name: Run sonar-scanner (waits for quality gate)
         env:
-          SONARQUBE_URL: ${{ vars.SONARQUBE_URL || 'http://127.0.0.1:9000' }}
+          SONARQUBE_URL: "http://127.0.0.1:19000"
           SONARQUBE_TOKEN: ${{ secrets.SONARQUBE_TOKEN }}
           SONARQUBE_ADMIN_USER: ${{ secrets.SONARQUBE_ADMIN_USER || 'admin' }}
           SONARQUBE_ADMIN_PASSWORD: ${{ secrets.SONARQUBE_ADMIN_PASSWORD || 'admin' }}
@@ -485,6 +520,7 @@ jobs:
           ensure_port_forward "grafana"    "monitoring" "grafana"       "13000" "80"   "/api/health"
           ensure_port_forward "prometheus" "monitoring" "prometheus"    "19090" "9090" "/-/healthy"
           ensure_port_forward "argocd"     "argocd"     "argocd-server" "18083" "80"   "/"
+          ensure_port_forward "sonarqube"  "sonarqube"  "sonarqube"     "19000" "9000" "/api/system/status"
           ensure_kubectl_proxy 18001
 
       - name: Print URLs
@@ -495,6 +531,7 @@ jobs:
           echo "  Grafana      : http://127.0.0.1:13000"
           echo "  Prometheus   : http://127.0.0.1:19090"
           echo "  Argo CD UI   : http://127.0.0.1:18083"
+          echo "  SonarQube    : http://127.0.0.1:19000"
           echo "  K8s Dashboard: http://127.0.0.1:18001/api/v1/namespaces/kubernetes-dashboard/services/http:kubernetes-dashboard:/proxy/"
           echo "======================================================"
           echo "Argo CD admin password:"

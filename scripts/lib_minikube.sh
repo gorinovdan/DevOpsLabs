@@ -783,6 +783,7 @@ stop_default_port_forwards() {
   stop_port_forward "grafana" "monitoring" "grafana" 13000 80
   stop_port_forward "prometheus" "monitoring" "prometheus" 19090 9090
   stop_port_forward "argocd" "argocd" "argocd-server" 18083 80
+  stop_port_forward "sonarqube" "sonarqube" "sonarqube" 19000 9000
   stop_kubectl_proxy 18001
 }
 

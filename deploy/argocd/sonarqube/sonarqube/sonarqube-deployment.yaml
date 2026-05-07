@@ -1,0 +1,144 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: sonarqube
+  namespace: sonarqube
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: sonarqube
+  template:
+    metadata:
+      labels:
+        app: sonarqube
+    spec:
+      # SonarQube embedded Elasticsearch needs vm.max_map_count >= 524288 and
+      # an unprivileged uid that owns the persistent volume. fsGroup ensures
+      # the mounted PVCs end up writable by the sonarqube user (1000).
+      securityContext:
+        fsGroup: 1000
+      initContainers:
+        - name: wait-for-postgres
+          image: postgres:16-alpine
+          command:
+            - sh
+            - -c
+            - |
+              until pg_isready -h "$DB_HOST" -p "$DB_PORT" -U "$DB_USER" -d "$DB_NAME"; do
+                echo "waiting for postgres";
+                sleep 2;
+              done
+          env:
+            - name: DB_HOST
+              value: sonar-postgres
+            - name: DB_PORT
+              value: "5432"
+            - name: DB_USER
+              valueFrom:
+                secretKeyRef:
+                  name: sonar-postgres-secret
+                  key: POSTGRES_USER
+            - name: DB_NAME
+              valueFrom:
+                secretKeyRef:
+                  name: sonar-postgres-secret
+                  key: POSTGRES_DB
+        - name: chown-volumes
+          image: busybox:1.36
+          # PVC root may belong to root:root depending on the storage
+          # provisioner; sonarqube runs as uid 1000 and fails to start when
+          # /opt/sonarqube/{data,extensions,logs} are not writable.
+          command:
+            - sh
+            - -c
+            - |
+              chown -R 1000:1000 /sonar-data /sonar-extensions /sonar-logs
+          securityContext:
+            runAsUser: 0
+          volumeMounts:
+            - name: data
+              mountPath: /sonar-data
+            - name: extensions
+              mountPath: /sonar-extensions
+            - name: logs
+              mountPath: /sonar-logs
+      containers:
+        - name: sonarqube
+          image: sonarqube:26.4.0.121862-community
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 9000
+              name: http
+          env:
+            - name: SONAR_JDBC_URL
+              value: jdbc:postgresql://sonar-postgres:5432/sonar
+            - name: SONAR_JDBC_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: sonar-postgres-secret
+                  key: POSTGRES_USER
+            - name: SONAR_JDBC_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: sonar-postgres-secret
+                  key: POSTGRES_PASSWORD
+            - name: SONAR_WEB_JAVAOPTS
+              value: "-Xmx768m -Xms256m"
+            - name: SONAR_CE_JAVAOPTS
+              value: "-Xmx512m -Xms128m"
+            - name: SONAR_SEARCH_JAVAOPTS
+              value: "-Xmx512m -Xms256m"
+            # minikube's default sysctl already permits ES; this disables the
+            # remaining bootstrap checks (file descriptors etc.) that fail in
+            # constrained environments without a kernel reconfigure.
+            - name: SONAR_ES_BOOTSTRAP_CHECKS_DISABLE
+              value: "true"
+          resources:
+            requests:
+              cpu: "200m"
+              memory: "1280Mi"
+            limits:
+              cpu: "1500m"
+              memory: "2Gi"
+          startupProbe:
+            httpGet:
+              path: /api/system/status
+              port: 9000
+            failureThreshold: 60
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /api/system/status
+              port: 9000
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 6
+          livenessProbe:
+            httpGet:
+              path: /api/system/status
+              port: 9000
+            initialDelaySeconds: 120
+            periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 6
+          volumeMounts:
+            - name: data
+              mountPath: /opt/sonarqube/data
+            - name: extensions
+              mountPath: /opt/sonarqube/extensions
+            - name: logs
+              mountPath: /opt/sonarqube/logs
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: sonarqube-data
+        - name: extensions
+          persistentVolumeClaim:
+            claimName: sonarqube-extensions
+        - name: logs
+          persistentVolumeClaim:
+            claimName: sonarqube-logs

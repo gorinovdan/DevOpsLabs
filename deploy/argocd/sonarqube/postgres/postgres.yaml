@@ -1,0 +1,22 @@
+apiVersion: v1
+kind: Secret
+metadata:
+  name: sonar-postgres-secret
+  namespace: sonarqube
+type: Opaque
+stringData:
+  POSTGRES_USER: sonar
+  POSTGRES_PASSWORD: sonar
+  POSTGRES_DB: sonar
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: sonar-postgres-data
+  namespace: sonarqube
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 2Gi

@@ -1,0 +1,20 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: sonarqube
+
+resources:
+  - namespaces/namespace.yaml
+  - postgres/postgres.yaml
+  - postgres/postgres-deployment.yaml
+  - postgres/postgres-service.yaml
+  - sonarqube/sonarqube-pvc.yaml
+  - sonarqube/sonarqube-deployment.yaml
+  - sonarqube/sonarqube-service.yaml
+
+labels:
+  - pairs:
+      app.kubernetes.io/part-of: sonarqube
+      app.kubernetes.io/managed-by: argocd
+    includeSelectors: false
+    includeTemplates: false
