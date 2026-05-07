@@ -101,10 +101,26 @@ echo "Waiting for Argo CD Application '${APP_NAME}' to become Healthy..."
 # in newer apiserver) even when the live state matches the rendered manifest
 # byte-for-byte; the --sync wait then loops indefinitely for those false
 # positives. Health is the authoritative signal that the workloads are up.
-"${ARGOCD_BIN}" app wait "${APP_NAME}" \
-  "${ARGO_FLAGS[@]}" \
-  --health \
-  --timeout "${ARGOCD_SYNC_TIMEOUT}"
+#
+# Retry the argocd CLI call: it has a strict selector check that fails
+# with "cannot find ready pod" if argocd-repo-server is mid-rollout
+# even though `kubectl rollout status` already returned OK. A few-second
+# wait clears the race.
+wait_attempts=5
+for attempt in $(seq 1 "${wait_attempts}"); do
+  if "${ARGOCD_BIN}" app wait "${APP_NAME}" \
+       "${ARGO_FLAGS[@]}" \
+       --health \
+       --timeout "${ARGOCD_SYNC_TIMEOUT}"; then
+    break
+  fi
+  if [[ "${attempt}" -eq "${wait_attempts}" ]]; then
+    echo "Error: 'argocd app wait --health' failed after ${wait_attempts} attempts." >&2
+    exit 1
+  fi
+  echo "  app wait attempt ${attempt} failed (likely repo-server pod transitioning), retrying in 10s..."
+  sleep 10
+done
 
 echo
 echo "Argo CD sync completed. Application status:"
