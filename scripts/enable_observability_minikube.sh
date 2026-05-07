@@ -44,11 +44,15 @@ apply_monitoring_manifests() {
 }
 
 wait_for_metrics_api() {
-  for _ in $(seq 1 30); do
-    if kubectl top nodes >/dev/null 2>&1; then
+  # Tight loop: when metrics-server is already healthy this returns
+  # in <2s; the previous 5s sleep meant we burned 5s every retry even
+  # though the API typically registers within 10-15s of metrics-server
+  # rollout completion.
+  for _ in $(seq 1 60); do
+    if kubectl --request-timeout=3s top nodes >/dev/null 2>&1; then
       return 0
     fi
-    sleep 5
+    sleep 2
   done
 
   echo "Error: Metrics API did not become available." >&2
