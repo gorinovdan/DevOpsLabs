@@ -4,11 +4,16 @@ kind: Kustomization
 namespace: flowboard
 
 resources:
-  - namespace.yaml
-  - postgres-secret.yaml
-  - postgres-deployment.yaml
-  - backend-deployment.yaml
-  - frontend-deployment.yaml
+  - namespaces/namespace.yaml
+  - postgres/postgres.yaml
+  - postgres/postgres-deployment.yaml
+  - postgres/postgres-service.yaml
+  - backend/backend-deployment.yaml
+  - backend/backend-service.yaml
+  - backend/backend-hpa.yaml
+  - frontend/frontend-deployment.yaml
+  - frontend/frontend-service.yaml
+  - frontend/frontend-hpa.yaml
 
 images:
   - name: ghcr.io/gorinovdan/devopslabs/backend

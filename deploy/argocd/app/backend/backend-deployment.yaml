@@ -97,38 +97,3 @@ spec:
             initialDelaySeconds: 20
             periodSeconds: 10
             timeoutSeconds: 3
----
-apiVersion: v1
-kind: Service
-metadata:
-  name: backend
-  namespace: flowboard
-  labels:
-    app: backend
-spec:
-  selector:
-    app: backend
-  ports:
-    - name: http
-      port: 8080
-      targetPort: 8080
----
-apiVersion: autoscaling/v2
-kind: HorizontalPodAutoscaler
-metadata:
-  name: backend-hpa
-  namespace: flowboard
-spec:
-  scaleTargetRef:
-    apiVersion: apps/v1
-    kind: Deployment
-    name: backend
-  minReplicas: 1
-  maxReplicas: 5
-  metrics:
-    - type: Resource
-      resource:
-        name: cpu
-        target:
-          type: Utilization
-          averageUtilization: 15

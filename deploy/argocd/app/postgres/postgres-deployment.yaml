@@ -45,16 +45,3 @@ spec:
         - name: postgres-data
           persistentVolumeClaim:
             claimName: postgres-data
----
-apiVersion: v1
-kind: Service
-metadata:
-  name: postgres
-  namespace: flowboard
-spec:
-  selector:
-    app: postgres
-  ports:
-    - name: postgres
-      port: 5432
-      targetPort: 5432
