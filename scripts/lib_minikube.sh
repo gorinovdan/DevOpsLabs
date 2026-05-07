@@ -9,11 +9,11 @@ require_cmd() {
 }
 
 # Run a kubectl command with retry on transient apiserver errors.
-# minikube's docker-driver apiserver intermittently emits EOF on
-# openapi/v2 schema fetches and similar control-plane calls; bare
-# `kubectl apply` then fails the whole CI step. Use this helper for any
-# kubectl invocation that touches openapi or whose target object may be
-# created/updated mid-flap.
+# minikube's docker-driver apiserver intermittently flaps for tens of
+# seconds at a time (EOF on openapi/v2, "connection refused" on the
+# loopback API endpoint, etc). Bare kubectl invocations then fail the
+# whole CI step. Use this helper for any kubectl invocation whose
+# target object may be created/updated/queried mid-flap.
 #
 # Usage: kubectl_retry <attempts> -- kubectl <args...>
 kubectl_retry() {
@@ -27,9 +27,33 @@ kubectl_retry() {
     if [[ "${attempt}" -eq "${attempts}" ]]; then
       return 1
     fi
-    echo "kubectl_retry: attempt ${attempt}/${attempts} failed (likely apiserver hiccup), sleeping 5s..." >&2
-    sleep 5
+    echo "kubectl_retry: attempt ${attempt}/${attempts} failed (likely apiserver hiccup), sleeping 10s..." >&2
+    sleep 10
   done
+}
+
+# Block until the apiserver is responsive, with a generous deadline.
+# We've observed apiserver flaps lasting 60-90s on the docker-driver
+# minikube under load; without an explicit gate, downstream kubectl
+# commands (kubectl apply, rollout status, etc) fail one by one and
+# burn the job's allotted retries individually.
+wait_for_apiserver() {
+  local timeout_seconds="${1:-300}"
+  local deadline=$(( $(date +%s) + timeout_seconds ))
+  local first=1
+  while [[ $(date +%s) -lt ${deadline} ]]; do
+    if kubectl --request-timeout=5s get --raw='/readyz' >/dev/null 2>&1; then
+      [[ "${first}" == "0" ]] && echo "apiserver responsive again."
+      return 0
+    fi
+    if [[ "${first}" == "1" ]]; then
+      echo "Waiting for apiserver to become responsive..."
+      first=0
+    fi
+    sleep 3
+  done
+  echo "Error: apiserver did not become responsive within ${timeout_seconds}s." >&2
+  return 1
 }
 
 proxy_targets_loopback() {
@@ -247,6 +271,11 @@ ensure_minikube_running() {
 
   if run_minikube status >/dev/null 2>&1; then
     configure_minikube_docker_proxy || true
+    # `minikube status` returns ok as soon as the docker container is
+    # alive, but kubelet / apiserver may still be booting. Block until
+    # the apiserver is actually serving readyz so downstream kubectl
+    # calls don't crash on a 60s flap.
+    wait_for_apiserver 180 || true
     return 0
   fi
 
