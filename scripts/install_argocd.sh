@@ -190,11 +190,18 @@ configure_insecure_server() {
     return 0
   fi
 
-  echo "Configuring argocd-server to serve plain HTTP for local minikube use..."
+  echo "Configuring argocd-server (insecure HTTP + 300s repo-server timeout)..."
+  # The default 60s deadline on argocd-server -> argocd-repo-server RPC is
+  # too tight for our usage: every `argocd app set --kustomize-image` builds
+  # a unique cache key (image SHA in the source spec), so the first call
+  # after a deployment has to do a cold `kustomize build` over a freshly
+  # cloned repo through the host proxy. That render routinely takes 60-90s
+  # and trips the deadline. 300s leaves enough headroom.
   kubectl -n "${ARGOCD_NAMESPACE}" patch configmap argocd-cmd-params-cm \
     --type merge \
-    -p '{"data":{"server.insecure":"true"}}'
+    -p '{"data":{"server.insecure":"true","server.repo.server.timeout.seconds":"300","controller.repo.server.timeout.seconds":"300"}}'
   kubectl -n "${ARGOCD_NAMESPACE}" rollout restart deployment argocd-server >/dev/null
+  kubectl -n "${ARGOCD_NAMESPACE}" rollout restart statefulset argocd-application-controller >/dev/null 2>&1 || true
   kubectl -n "${ARGOCD_NAMESPACE}" rollout status deployment argocd-server --timeout=300s || true
 }
 

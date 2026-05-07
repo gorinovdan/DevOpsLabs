@@ -67,46 +67,33 @@ trap restore_namespace EXIT
 # proxy so argocd does not tunnel cluster API calls through it.
 unset HTTP_PROXY HTTPS_PROXY ALL_PROXY http_proxy https_proxy all_proxy
 
-# Warm up the repo-server's manifest cache before the timed `app set` call.
-# A cold `kustomize build` inside the repo-server pod runs in ~60-90s right
-# after a fresh rollout (git clone over the host proxy + first kustomize
-# render), and the controller's RPC deadline to repo-server is 60s by
-# default — so the *first* `app set` reliably fails with DeadlineExceeded.
-# A bare `app get --refresh` triggers the same render path with no deadline
-# wired up to the CLI, populating the cache so the subsequent `app set`
-# returns in <1s.
-echo "Warming up Argo CD repo-server manifest cache for '${APP_NAME}'..."
-for attempt in 1 2 3; do
-  if "${ARGOCD_BIN}" app get "${APP_NAME}" "${ARGO_FLAGS[@]}" --refresh >/dev/null 2>&1; then
-    echo "  cache warmed (attempt ${attempt})"
-    break
-  fi
-  echo "  refresh attempt ${attempt} failed, retrying in 10s..."
-  sleep 10
-done
+# In --core mode the argocd CLI runs an in-process argocd-server. Its
+# default 60s gRPC deadline to the in-cluster argocd-repo-server is too
+# tight: every `app set --kustomize-image <new SHA>` triggers a fresh
+# kustomize render through host proxy that takes 60-90s. Bump to 300s so
+# cold renders no longer fail with DeadlineExceeded. (Cluster-side
+# argocd-server is already patched to the same value via install_argocd.)
+export ARGOCD_SERVER_REPO_SERVER_TIMEOUT_SECONDS="${ARGOCD_SERVER_REPO_SERVER_TIMEOUT_SECONDS:-300}"
 
-echo "Updating image overrides on Argo CD Application '${APP_NAME}'..."
-set_attempts=3
-for attempt in $(seq 1 "${set_attempts}"); do
-  if "${ARGOCD_BIN}" app set "${APP_NAME}" \
-       "${ARGO_FLAGS[@]}" \
-       --kustomize-image "ghcr.io/gorinovdan/devopslabs/backend=${BACKEND_IMAGE}" \
-       --kustomize-image "ghcr.io/gorinovdan/devopslabs/frontend=${FRONTEND_IMAGE}"; then
-    break
-  fi
-  if [[ "${attempt}" -eq "${set_attempts}" ]]; then
-    echo "Error: 'argocd app set' failed after ${set_attempts} attempts." >&2
-    exit 1
-  fi
-  echo "  app set attempt ${attempt} failed, retrying in 15s..."
-  sleep 15
-done
+# Patch the Application's kustomize image overrides directly via the
+# Kubernetes API. `argocd app set --kustomize-image` runs validation
+# server-side which has a hardcoded ~90s gRPC deadline to repo-server,
+# and the first cold render after a deploy reliably exceeds that. A
+# direct kubectl patch updates spec.source.kustomize.images instantly;
+# the application controller does the kustomize build asynchronously
+# during the next reconcile loop with no client-side deadline.
+echo "Patching Argo CD Application '${APP_NAME}' kustomize image overrides..."
+kubectl -n "${ARGOCD_NAMESPACE}" patch application "${APP_NAME}" --type=merge -p "$(cat <<EOF
+{"spec":{"source":{"kustomize":{"images":["ghcr.io/gorinovdan/devopslabs/backend=${BACKEND_IMAGE}","ghcr.io/gorinovdan/devopslabs/frontend=${FRONTEND_IMAGE}"]}}}}
+EOF
+)"
 
-echo "Triggering Argo CD sync for '${APP_NAME}'..."
-"${ARGOCD_BIN}" app sync "${APP_NAME}" \
-  "${ARGO_FLAGS[@]}" \
-  --prune \
-  --timeout "${ARGOCD_SYNC_TIMEOUT}" || true
+# The Application has syncPolicy.automated.{prune,selfHeal}=true so the
+# argocd-application-controller picks up the new spec automatically and
+# reconciles within seconds. Calling `argocd app sync` explicitly would
+# hit the same gRPC deadline that broke `app set`, and would block for
+# 10+ minutes on ComparisonError when the repo-server's local git
+# checkout is in a transient bad state. Trust the controller instead.
 
 echo "Waiting for Argo CD Application '${APP_NAME}' to become Healthy..."
 # We only wait for --health here. Argo CD's comparator can mark Deployments
