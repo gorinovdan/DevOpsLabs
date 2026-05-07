@@ -101,17 +101,45 @@ preload_argocd_images_into_minikube() {
 }
 
 install_argocd_components() {
-  if kubectl -n "${ARGOCD_NAMESPACE}" get deploy argocd-server >/dev/null 2>&1; then
-    echo "Argo CD already installed in namespace ${ARGOCD_NAMESPACE}, skipping bulk install."
-    return 0
-  fi
-
   preload_argocd_images_into_minikube
 
-  echo "Applying Argo CD manifests from ${ARGOCD_INSTALL_MANIFEST}..."
-  kubectl apply -n "${ARGOCD_NAMESPACE}" -f "${ARGOCD_INSTALL_MANIFEST}"
+  if ! kubectl -n "${ARGOCD_NAMESPACE}" get deploy argocd-server >/dev/null 2>&1; then
+    echo "Applying Argo CD manifests from ${ARGOCD_INSTALL_MANIFEST}..."
+    kubectl apply -n "${ARGOCD_NAMESPACE}" -f "${ARGOCD_INSTALL_MANIFEST}"
+    configure_argocd_workloads_proxy
+  else
+    echo "Argo CD already installed in namespace ${ARGOCD_NAMESPACE}, skipping bulk install."
+  fi
 
-  configure_argocd_workloads_proxy
+  # Always (re)apply: upstream manifest defaults imagePullPolicy=Always for
+  # every workload, which means a transient 502 from quay.io blocks every
+  # rollout — kubelet does a HEAD digest check before honoring local cache.
+  # Switching to IfNotPresent makes Argo CD pods reuse the image we just
+  # preloaded into minikube and survives upstream registry hiccups.
+  patch_argocd_image_pull_policy
+}
+
+patch_argocd_image_pull_policy() {
+  echo "Setting imagePullPolicy=IfNotPresent on Argo CD workloads..."
+  local d
+  for d in argocd-server argocd-repo-server argocd-applicationset-controller \
+           argocd-notifications-controller argocd-dex-server; do
+    if kubectl -n "${ARGOCD_NAMESPACE}" get deploy "${d}" >/dev/null 2>&1; then
+      kubectl -n "${ARGOCD_NAMESPACE}" patch deploy "${d}" --type=json \
+        -p='[{"op":"replace","path":"/spec/template/spec/containers/0/imagePullPolicy","value":"IfNotPresent"}]' \
+        >/dev/null 2>&1 || true
+    fi
+  done
+  if kubectl -n "${ARGOCD_NAMESPACE}" get statefulset argocd-application-controller >/dev/null 2>&1; then
+    kubectl -n "${ARGOCD_NAMESPACE}" patch statefulset argocd-application-controller --type=json \
+      -p='[{"op":"replace","path":"/spec/template/spec/containers/0/imagePullPolicy","value":"IfNotPresent"}]' \
+      >/dev/null 2>&1 || true
+  fi
+  # Pods already in ImagePullBackOff retain the old policy in their spec.
+  # Force-delete them so the new ReplicaSet uses the patched template.
+  kubectl -n "${ARGOCD_NAMESPACE}" get pods --no-headers 2>/dev/null \
+    | awk '$3 ~ /ImagePullBackOff|ErrImagePull/ {print $1}' \
+    | xargs -r -n 1 kubectl -n "${ARGOCD_NAMESPACE}" delete pod --grace-period=0 --force --wait=false >/dev/null 2>&1 || true
 }
 
 # Argo CD's repo-server pod clones the application's git repo. On a

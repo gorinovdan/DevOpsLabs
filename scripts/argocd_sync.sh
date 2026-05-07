@@ -33,13 +33,15 @@ fi
 
 # argocd --core delegates manifest rendering to argocd-repo-server pod.
 # Wait until each Argo CD workload has at least one Ready replica, otherwise
-# CLI commands fail with "cannot find ready pod with selector ...".
+# CLI commands fail with "cannot find ready pod with selector ...". The
+# 360s timeout absorbs upstream quay.io 502s during ImagePullBackOff
+# retries while the kubelet falls back to the locally preloaded image.
 echo "Waiting for Argo CD core pods to become Ready..."
 for d in argocd-repo-server argocd-application-controller argocd-server argocd-redis; do
   if kubectl -n "${ARGOCD_NAMESPACE}" get deploy "${d}" >/dev/null 2>&1; then
-    kubectl -n "${ARGOCD_NAMESPACE}" rollout status "deploy/${d}" --timeout=180s
+    kubectl -n "${ARGOCD_NAMESPACE}" rollout status "deploy/${d}" --timeout=360s
   elif kubectl -n "${ARGOCD_NAMESPACE}" get statefulset "${d}" >/dev/null 2>&1; then
-    kubectl -n "${ARGOCD_NAMESPACE}" rollout status "statefulset/${d}" --timeout=180s
+    kubectl -n "${ARGOCD_NAMESPACE}" rollout status "statefulset/${d}" --timeout=360s
   fi
 done
 
