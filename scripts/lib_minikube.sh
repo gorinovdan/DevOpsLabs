@@ -506,8 +506,17 @@ load_image_into_minikube() {
     return 0
   fi
 
+  # `minikube image load` streams the image over the minikube SSH tunnel
+  # using the daemon's optimized blob upload path. The previous
+  # `docker save | docker load` pipe through Docker Desktop's TCP socket
+  # bottlenecked at ~5MB/s and stalled out on >500MB images
+  # (sonarqube:26.4 is ~1GB compressed). Try the native loader first.
   if docker image inspect "${image}" >/dev/null 2>&1; then
-    echo "Loading image into minikube: ${image}"
+    echo "Loading image into minikube via 'minikube image load': ${image}"
+    if minikube -p minikube image load "${image}"; then
+      return 0
+    fi
+    echo "Warning: 'minikube image load' failed, falling back to docker save|load."
     docker save "${image}" | (
       eval "$(run_minikube -p minikube docker-env --shell bash)"
       docker load >/dev/null
@@ -521,7 +530,11 @@ load_image_into_minikube() {
 
   ensure_host_image "${image}"
 
-  echo "Loading image into minikube: ${image}"
+  echo "Loading image into minikube via 'minikube image load': ${image}"
+  if minikube -p minikube image load "${image}"; then
+    return 0
+  fi
+  echo "Warning: 'minikube image load' failed, falling back to docker save|load."
   docker save "${image}" | (
     eval "$(run_minikube -p minikube docker-env --shell bash)"
     docker load >/dev/null
