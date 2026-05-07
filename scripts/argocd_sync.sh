@@ -31,6 +31,18 @@ if ! kubectl -n "${ARGOCD_NAMESPACE}" get application.argoproj.io "${APP_NAME}" 
   exit 1
 fi
 
+# argocd --core delegates manifest rendering to argocd-repo-server pod.
+# Wait until each Argo CD workload has at least one Ready replica, otherwise
+# CLI commands fail with "cannot find ready pod with selector ...".
+echo "Waiting for Argo CD core pods to become Ready..."
+for d in argocd-repo-server argocd-application-controller argocd-server argocd-redis; do
+  if kubectl -n "${ARGOCD_NAMESPACE}" get deploy "${d}" >/dev/null 2>&1; then
+    kubectl -n "${ARGOCD_NAMESPACE}" rollout status "deploy/${d}" --timeout=180s
+  elif kubectl -n "${ARGOCD_NAMESPACE}" get statefulset "${d}" >/dev/null 2>&1; then
+    kubectl -n "${ARGOCD_NAMESPACE}" rollout status "statefulset/${d}" --timeout=180s
+  fi
+done
+
 # Use --core mode so argocd CLI talks directly to the cluster API rather
 # than requiring a logged-in argocd-server session over HTTPS.
 ARGO_FLAGS=(--core --grpc-web --plaintext)
