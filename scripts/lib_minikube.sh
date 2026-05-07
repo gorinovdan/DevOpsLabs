@@ -779,9 +779,12 @@ ensure_port_forward() {
     > "${pid_file}"
 
   # Apiserver SPDY upgrade is flaky right after Docker Desktop or minikube
-  # restart, so first /healthz attempts may timeout even though the listener
-  # is up. Be generous (90s) and tolerate transient failures.
-  if wait_for_local_port "${local_port}" 127.0.0.1 30 && { [[ -z "${health_url}" ]] || wait_for_http_endpoint "${health_url}" 90; }; then
+  # restart, so first health-probe attempts may timeout even though the
+  # listener is up. Tolerate transient failures: if the listener is up
+  # we already have a working port-forward, the health probe is just a
+  # readiness signal — bail to a warning after 30s rather than burning
+  # 4.5 min on every cold port-forward.
+  if wait_for_local_port "${local_port}" 127.0.0.1 30 && { [[ -z "${health_url}" ]] || wait_for_http_endpoint "${health_url}" 30; }; then
     return 0
   fi
 

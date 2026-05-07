@@ -268,7 +268,12 @@ setup_local_port_forward() {
     return 0
   fi
 
-  ensure_port_forward "argocd" "${ARGOCD_NAMESPACE}" "argocd-server" "${ARGOCD_LOCAL_PORT}" 80 "/healthz"
+  # Skip the /healthz wait: argocd-server's readiness probe already passed
+  # by the time we reach here, and the wait_for_http_endpoint default of
+  # 90 attempts × 3s burned 4.5 min on hot cluster runs when the port-
+  # forward briefly hiccupped. The argocd-deploy job re-establishes this
+  # forward at the end with the same listener-only semantics.
+  ensure_port_forward "argocd" "${ARGOCD_NAMESPACE}" "argocd-server" "${ARGOCD_LOCAL_PORT}" 80
 }
 
 print_initial_credentials() {
