@@ -139,6 +139,40 @@ reset_minikube_profile() {
   run_minikube delete >/dev/null 2>&1 || true
 }
 
+minikube_status_text() {
+  run_minikube status 2>&1 || true
+}
+
+minikube_profile_is_stale() {
+  local status_text="$1"
+
+  if printf '%s\n' "${status_text}" | grep -q "No such container: minikube"; then
+    return 1
+  fi
+
+  if printf '%s\n' "${status_text}" | grep -q "host: Running" \
+      && printf '%s\n' "${status_text}" | grep -Eq "kubelet: Stopped|apiserver: Stopped"; then
+    return 0
+  fi
+
+  return 1
+}
+
+start_minikube_profile() {
+  local driver="${1:-docker}"
+  local cpus="${2:-4}"
+  local memory="${3:-6144}"
+  local wait_timeout="${MINIKUBE_WAIT_TIMEOUT:-6m0s}"
+
+  run_minikube start \
+    --driver="${driver}" \
+    --cpus="${cpus}" \
+    --memory="${memory}" \
+    --delete-on-failure=true \
+    --wait=apiserver,kubelet,system_pods \
+    --wait-timeout="${wait_timeout}"
+}
+
 compute_file_hash() {
   local file_path="$1"
 
@@ -268,6 +302,9 @@ ensure_minikube_running() {
   local driver="${2:-docker}"
   local cpus="${3:-4}"
   local memory="${4:-6144}"
+  local status_text=""
+
+  status_text="$(minikube_status_text)"
 
   if run_minikube status >/dev/null 2>&1; then
     configure_minikube_docker_proxy || true
@@ -275,25 +312,39 @@ ensure_minikube_running() {
     # alive, but kubelet / apiserver may still be booting. Block until
     # the apiserver is actually serving readyz so downstream kubectl
     # calls don't crash on a 60s flap.
-    wait_for_apiserver 180 || true
-    return 0
-  fi
-
-  if [[ "${auto_start}" != "1" ]]; then
+    if wait_for_apiserver 180; then
+      return 0
+    fi
+    if [[ "${auto_start}" == "1" ]]; then
+      echo "Existing minikube profile is not responsive; resetting it before retry." >&2
+      reset_minikube_profile
+    else
+      return 1
+    fi
+  elif [[ "${auto_start}" == "1" ]] && minikube_profile_is_stale "${status_text}"; then
+    echo "Detected stale minikube profile with stopped kubelet/apiserver; resetting it before start." >&2
+    reset_minikube_profile
+  elif [[ "${auto_start}" != "1" ]]; then
     echo "Error: minikube is not running. Start it first or set AUTO_START_MINIKUBE=1." >&2
     exit 1
   fi
 
+  if run_minikube status >/dev/null 2>&1; then
+    return 0
+  fi
+
   echo "Starting minikube with driver=${driver}, cpus=${cpus}, memory=${memory}..."
-  if run_minikube start --driver="${driver}" --cpus="${cpus}" --memory="${memory}"; then
+  if start_minikube_profile "${driver}" "${cpus}" "${memory}"; then
     configure_minikube_docker_proxy || true
+    wait_for_apiserver 300
     return 0
   fi
 
   reset_minikube_profile
   echo "Retrying minikube start with a clean profile..." >&2
-  run_minikube start --driver="${driver}" --cpus="${cpus}" --memory="${memory}"
+  start_minikube_profile "${driver}" "${cpus}" "${memory}"
   configure_minikube_docker_proxy || true
+  wait_for_apiserver 300
 }
 
 # When the host is sitting behind an HTTP/SOCKS proxy on 127.0.0.1
