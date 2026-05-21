@@ -78,6 +78,8 @@ jobs:
     if: >-
       github.event_name == 'workflow_dispatch' ||
       needs.changes.outputs.backend == 'true' ||
+      needs.changes.outputs.frontend == 'true' ||
+      needs.changes.outputs.infra == 'true' ||
       needs.changes.outputs.ci == 'true'
     defaults:
       run:
@@ -135,7 +137,9 @@ jobs:
     needs: changes
     if: >-
       github.event_name == 'workflow_dispatch' ||
+      needs.changes.outputs.backend == 'true' ||
       needs.changes.outputs.frontend == 'true' ||
+      needs.changes.outputs.infra == 'true' ||
       needs.changes.outputs.ci == 'true'
     defaults:
       run:
@@ -523,6 +527,12 @@ jobs:
           BUILD_OBSERVABILITY_LOCAL: "1"
         run: ./scripts/enable_observability_minikube.sh
 
+      - name: Ensure Kubernetes Dashboard is up
+        env:
+          AUTO_START_MINIKUBE: "1"
+          ENABLE_KUBECTL_PROXY: "0"
+        run: ./scripts/ensure_kubernetes_dashboard.sh
+
       - name: Re-establish app port-forwards
         run: |
           source scripts/lib_minikube.sh
@@ -533,6 +543,9 @@ jobs:
           ensure_port_forward "argocd"     "argocd"     "argocd-server" "18083" "80"   "/"
           ensure_port_forward "sonarqube"  "sonarqube"  "sonarqube"     "19000" "9000" "/api/system/status"
           ensure_kubectl_proxy 18001
+
+      - name: Verify published local URLs
+        run: ./scripts/verify_ci_endpoints.sh
 
       - name: Print URLs
         run: |
@@ -545,10 +558,13 @@ jobs:
           echo "  SonarQube    : http://127.0.0.1:19000"
           echo "  K8s Dashboard: http://127.0.0.1:18001/api/v1/namespaces/kubernetes-dashboard/services/http:kubernetes-dashboard:/proxy/"
           echo "======================================================"
-          echo "Argo CD admin password:"
-          kubectl -n argocd get secret argocd-initial-admin-secret \
-            -o jsonpath='{.data.password}' | base64 -d || true
-          echo
+          password="$(kubectl -n argocd get secret argocd-initial-admin-secret \
+            -o jsonpath='{.data.password}' 2>/dev/null | base64 -d || true)"
+          if [[ -n "${password}" ]]; then
+            echo "::add-mask::${password}"
+            echo "Argo CD username: admin"
+            echo "Argo CD password: use 'kubectl -n argocd get secret argocd-initial-admin-secret -o jsonpath={.data.password} | base64 -d'"
+          fi
 
       - name: Smoke test via frontend reverse proxy
         env:
