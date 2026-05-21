@@ -3,6 +3,7 @@ set -euo pipefail
 
 WAIT_ATTEMPTS="${WAIT_ATTEMPTS:-90}"
 WAIT_DELAY_SEC="${WAIT_DELAY_SEC:-2}"
+VERIFY_REESTABLISH_PORT_FORWARDS="${VERIFY_REESTABLISH_PORT_FORWARDS:-0}"
 
 FRONTEND_URL="${FRONTEND_URL:-http://127.0.0.1:18081/}"
 BACKEND_URL="${BACKEND_URL:-http://127.0.0.1:18080/health}"
@@ -27,7 +28,7 @@ wait_for_url() {
 
   echo "Checking ${name}: ${url}"
   for attempt in $(seq 1 "${WAIT_ATTEMPTS}"); do
-    if curl -fsSL --max-time 5 "${url}" >/dev/null 2>&1; then
+    if curl --noproxy '*' -fsSL --connect-timeout 2 --max-time 5 "${url}" >/dev/null 2>&1; then
       echo "  OK: ${name}"
       return 0
     fi
@@ -42,6 +43,22 @@ wait_for_url() {
 }
 
 require_cmd curl
+
+if [[ "${VERIFY_REESTABLISH_PORT_FORWARDS}" == "1" ]]; then
+  script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  # shellcheck source=scripts/lib_minikube.sh
+  source "${script_dir}/lib_minikube.sh"
+
+  echo "Re-establishing CI/CD port-forwards before URL verification..."
+  ensure_port_forward "frontend"   "flowboard"  "frontend"      "18081" "80"   "/"
+  ensure_port_forward "backend"    "flowboard"  "backend"       "18080" "8080" "/health"
+  ensure_port_forward "grafana"    "monitoring" "grafana"       "13000" "80"   "/api/health"
+  ensure_port_forward "prometheus" "monitoring" "prometheus"    "19090" "9090" "/-/healthy"
+  ensure_port_forward "argocd"     "argocd"     "argocd-server" "18083" "80"   "/"
+  ensure_port_forward "sonarqube"  "sonarqube"  "sonarqube"     "19000" "9000" "/api/system/status"
+  ensure_kubectl_proxy 18001
+  echo
+fi
 
 wait_for_url "Frontend" "${FRONTEND_URL}"
 wait_for_url "Backend health" "${BACKEND_URL}"

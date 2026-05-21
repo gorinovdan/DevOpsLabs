@@ -547,6 +547,8 @@ jobs:
           ensure_kubectl_proxy 18001
 
       - name: Verify published local URLs
+        env:
+          VERIFY_REESTABLISH_PORT_FORWARDS: "1"
         run: ./scripts/verify_ci_endpoints.sh
 
       - name: Print URLs

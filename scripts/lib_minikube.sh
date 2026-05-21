@@ -872,9 +872,38 @@ wait_for_http_endpoint() {
   # iteration. With the typical "wait until Ready" use case, the endpoint
   # responds in <100ms once it's actually up.
   for _ in $(seq 1 "${attempts}"); do
-    if curl -fsS --max-time 2 "${url}" >/dev/null 2>&1; then
+    if curl --noproxy '*' -fsSL --connect-timeout 2 --max-time 2 "${url}" >/dev/null 2>&1; then
       return 0
     fi
+    sleep 1
+  done
+
+  return 1
+}
+
+wait_for_port_forward_http_endpoint() {
+  local pid_file="$1"
+  local local_port="$2"
+  local url="$3"
+  local attempts="${4:-60}"
+  local pid=""
+
+  require_cmd curl
+
+  for _ in $(seq 1 "${attempts}"); do
+    if curl --noproxy '*' -fsSL --connect-timeout 2 --max-time 2 "${url}" >/dev/null 2>&1; then
+      return 0
+    fi
+
+    pid="$(cat "${pid_file}" 2>/dev/null || true)"
+    if [[ -n "${pid}" ]] && ! kill -0 "${pid}" 2>/dev/null; then
+      return 1
+    fi
+
+    if [[ -z "$(find_listener_pid "${local_port}" || true)" ]]; then
+      return 1
+    fi
+
     sleep 1
   done
 
@@ -955,8 +984,9 @@ ensure_port_forward() {
   local listener_pid=""
   local listener_cmd=""
   local health_url=""
+  local health_attempts="${PORT_FORWARD_HEALTH_ATTEMPTS:-120}"
   local start_attempt=""
-  local start_attempts="${PORT_FORWARD_START_ATTEMPTS:-3}"
+  local start_attempts="${PORT_FORWARD_START_ATTEMPTS:-6}"
   local started_pid=""
 
   mkdir -p "${state_dir}"
@@ -968,12 +998,12 @@ ensure_port_forward() {
     existing_pid="$(cat "${pid_file}" 2>/dev/null || true)"
     if [[ -n "${existing_pid}" ]] && kill -0 "${existing_pid}" 2>/dev/null; then
       if wait_for_local_port "${local_port}" 127.0.0.1 1; then
-        if [[ -z "${health_url}" ]] || wait_for_http_endpoint "${health_url}" 2; then
+        if [[ -z "${health_url}" ]] || wait_for_port_forward_http_endpoint "${pid_file}" "${local_port}" "${health_url}" 2; then
           echo "Reusing port-forward ${name}: http://127.0.0.1:${local_port}"
           return 0
         fi
       fi
-      kill "${existing_pid}" >/dev/null 2>&1 || true
+      terminate_pid "${existing_pid}"
       sleep 1
     fi
     rm -f "${pid_file}"
@@ -983,18 +1013,19 @@ ensure_port_forward() {
   if [[ -n "${listener_pid}" ]]; then
     listener_cmd="$(ps -p "${listener_pid}" -o command= 2>/dev/null || true)"
     if [[ "${listener_cmd}" == *"kubectl"* && "${listener_cmd}" == *"port-forward"* && "${listener_cmd}" == *"service/${service}"* && "${listener_cmd}" == *"${local_port}:${remote_port}"* ]]; then
-      if [[ -z "${health_url}" ]] || wait_for_http_endpoint "${health_url}" 2; then
-        echo "${listener_pid}" > "${pid_file}"
+      echo "${listener_pid}" > "${pid_file}"
+      if [[ -z "${health_url}" ]] || wait_for_port_forward_http_endpoint "${pid_file}" "${local_port}" "${health_url}" 2; then
         echo "Reusing port-forward ${name}: http://127.0.0.1:${local_port}"
         return 0
       fi
 
       terminate_pid "${listener_pid}"
+      rm -f "${pid_file}"
       sleep 1
+    else
+      echo "Error: local port ${local_port} is already in use by another process: ${listener_cmd}" >&2
+      return 1
     fi
-
-    echo "Error: local port ${local_port} is already in use by another process: ${listener_cmd}" >&2
-    return 1
   fi
 
   for start_attempt in $(seq 1 "${start_attempts}"); do
@@ -1006,12 +1037,20 @@ ensure_port_forward() {
       > "${pid_file}"
 
     if wait_for_local_port "${local_port}" 127.0.0.1 30; then
-      if [[ -z "${health_url}" ]] || wait_for_http_endpoint "${health_url}" 30; then
+      if [[ -z "${health_url}" ]] || wait_for_port_forward_http_endpoint "${pid_file}" "${local_port}" "${health_url}" "${health_attempts}"; then
         return 0
       fi
 
-      echo "Warning: port-forward ${name} listener is up but health probe ${health_url} did not respond yet. Continuing." >&2
-      return 0
+      started_pid="$(cat "${pid_file}" 2>/dev/null || true)"
+      terminate_pid "${started_pid}"
+      rm -f "${pid_file}"
+      echo "Warning: port-forward ${name} health probe ${health_url} did not become reachable." >&2
+      if [[ -s "${log_file}" ]]; then
+        echo "Recent ${name} port-forward log:" >&2
+        tail -n 20 "${log_file}" >&2 || true
+      fi
+      sleep 2
+      continue
     fi
 
     started_pid="$(cat "${pid_file}" 2>/dev/null || true)"

@@ -36,7 +36,7 @@ require_cmd curl
 
 if [[ -z "${FRONTEND_URL}" ]]; then
   FRONTEND_URL="http://127.0.0.1:${PORT_FORWARD_PORT}"
-  if ! curl -fsS "${FRONTEND_URL}/" >/dev/null 2>&1; then
+  if ! curl --noproxy '*' -fsS --connect-timeout 2 --max-time 5 "${FRONTEND_URL}/" >/dev/null 2>&1; then
     rm -f "${PORT_FORWARD_LOG}"
     kubectl -n "${NAMESPACE}" port-forward service/frontend "${PORT_FORWARD_PORT}:80" >"${PORT_FORWARD_LOG}" 2>&1 &
     PORT_FORWARD_PID=$!
@@ -53,13 +53,13 @@ echo "Using frontend URL: ${FRONTEND_URL}"
 
 echo "Waiting for frontend root page..."
 for _ in $(seq 1 30); do
-  if curl -fsS "${FRONTEND_URL}/" >/dev/null 2>&1; then
+  if curl --noproxy '*' -fsS --connect-timeout 2 --max-time 5 "${FRONTEND_URL}/" >/dev/null 2>&1; then
     break
   fi
   sleep 2
 done
 
-if ! curl -fsS "${FRONTEND_URL}/" >/dev/null 2>&1; then
+if ! curl --noproxy '*' -fsS --connect-timeout 2 --max-time 5 "${FRONTEND_URL}/" >/dev/null 2>&1; then
   echo "Error: frontend did not become reachable at ${FRONTEND_URL}" >&2
   exit 1
 fi
@@ -71,7 +71,7 @@ EOF
 )"
 
 echo "Creating a task through frontend -> backend -> postgres..."
-created_task="$(curl -fsS -X POST "${FRONTEND_URL}/api/tasks" -H 'Content-Type: application/json' --data "${create_payload}")"
+created_task="$(curl --noproxy '*' -fsS --connect-timeout 2 --max-time 10 -X POST "${FRONTEND_URL}/api/tasks" -H 'Content-Type: application/json' --data "${create_payload}")"
 task_id="$(printf '%s' "${created_task}" | extract_task_id)"
 
 if [[ -z "${task_id}" ]]; then
@@ -82,22 +82,22 @@ fi
 echo "Created task id=${task_id}"
 
 echo "Checking task fetch and insights..."
-fetched_task="$(curl -fsS "${FRONTEND_URL}/api/tasks/${task_id}")"
+fetched_task="$(curl --noproxy '*' -fsS --connect-timeout 2 --max-time 10 "${FRONTEND_URL}/api/tasks/${task_id}")"
 printf '%s' "${fetched_task}" | grep -q "\"id\":${task_id}"
-curl -fsS "${FRONTEND_URL}/api/insights" >/dev/null
-curl -fsS "${FRONTEND_URL}/api/tasks" >/dev/null
+curl --noproxy '*' -fsS --connect-timeout 2 --max-time 10 "${FRONTEND_URL}/api/insights" >/dev/null
+curl --noproxy '*' -fsS --connect-timeout 2 --max-time 10 "${FRONTEND_URL}/api/tasks" >/dev/null
 
 update_payload='{"title":"Smoke Task Updated","status":"in_progress","priority":"high","owner":"ci","effortHours":3,"tags":["smoke","updated"]}'
 echo "Updating the created task..."
-updated_task="$(curl -fsS -X PUT "${FRONTEND_URL}/api/tasks/${task_id}" -H 'Content-Type: application/json' --data "${update_payload}")"
+updated_task="$(curl --noproxy '*' -fsS --connect-timeout 2 --max-time 10 -X PUT "${FRONTEND_URL}/api/tasks/${task_id}" -H 'Content-Type: application/json' --data "${update_payload}")"
 printf '%s' "${updated_task}" | grep -q '"title":"Smoke Task Updated"'
 
 echo "Deleting the created task..."
-curl -fsS -X DELETE "${FRONTEND_URL}/api/tasks/${task_id}" >/dev/null
+curl --noproxy '*' -fsS --connect-timeout 2 --max-time 10 -X DELETE "${FRONTEND_URL}/api/tasks/${task_id}" >/dev/null
 
 echo "Verifying backend endpoints behind the frontend reverse proxy..."
-curl -fsS "${FRONTEND_URL}/api/tasks" >/dev/null
-curl -fsS "${FRONTEND_URL}/api/insights" >/dev/null
+curl --noproxy '*' -fsS --connect-timeout 2 --max-time 10 "${FRONTEND_URL}/api/tasks" >/dev/null
+curl --noproxy '*' -fsS --connect-timeout 2 --max-time 10 "${FRONTEND_URL}/api/insights" >/dev/null
 
 echo
 echo "Smoke test passed."
