@@ -31,12 +31,14 @@ spec:
         factor: 2
         maxDuration: 3m
   # Argo CD's spec-equality comparator otherwise reports Deployment/Service as
-  # OutOfSync forever because the apiserver dehydrates the manifest with these
-  # default fields on apply, which the rendered manifest doesn't carry.
+  # OutOfSync forever because HPA owns Deployment replicas and the apiserver
+  # dehydrates the manifest with these default fields on apply, which the
+  # rendered manifest doesn't carry.
   ignoreDifferences:
     - group: apps
       kind: Deployment
       jsonPointers:
+        - /spec/replicas
         - /spec/progressDeadlineSeconds
         - /spec/revisionHistoryLimit
         - /spec/strategy
