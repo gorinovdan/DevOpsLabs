@@ -165,6 +165,8 @@ start_minikube_profile() {
   local wait_timeout="${MINIKUBE_WAIT_TIMEOUT:-6m0s}"
   local kubernetes_version="${MINIKUBE_KUBERNETES_VERSION:-v1.31.6}"
 
+  preload_minikube_bootstrap_assets "${kubernetes_version}"
+
   run_minikube start \
     --driver="${driver}" \
     --cpus="${cpus}" \
@@ -198,6 +200,112 @@ minikube_profile_version_mismatch() {
 
   current_version="$(minikube_profile_kubernetes_version || true)"
   [[ -n "${current_version}" && "${current_version}" != "${desired_version}" ]]
+}
+
+minikube_core_images() {
+  local kubernetes_version="${1}"
+
+  case "${kubernetes_version}" in
+    v1.31.6)
+      printf '%s\n' \
+        "registry.k8s.io/kube-apiserver:${kubernetes_version}" \
+        "registry.k8s.io/kube-controller-manager:${kubernetes_version}" \
+        "registry.k8s.io/kube-scheduler:${kubernetes_version}" \
+        "registry.k8s.io/kube-proxy:${kubernetes_version}" \
+        "registry.k8s.io/etcd:3.5.15-0" \
+        "registry.k8s.io/coredns/coredns:v1.11.3" \
+        "registry.k8s.io/pause:3.10" \
+        "gcr.io/k8s-minikube/storage-provisioner:v5"
+      ;;
+  esac
+}
+
+minikube_image_cache_path() {
+  local image="${1}"
+  local arch
+  local cache_name
+
+  arch="$(detect_host_arch)"
+  cache_name="${image//@sha256:/@sha256_}"
+  cache_name="${cache_name//:/_}"
+
+  printf '%s/.minikube/cache/images/%s/%s\n' "${HOME}" "${arch}" "${cache_name}"
+}
+
+ensure_minikube_binary_cached() {
+  local kubernetes_version="${1}"
+  local binary_name="${2}"
+  local arch
+  local cache_dir
+  local target
+  local tmp
+  local expected
+  local actual
+  local base_url
+
+  require_cmd curl
+  require_cmd shasum
+
+  arch="$(detect_host_arch)"
+  cache_dir="${HOME}/.minikube/cache/linux/${arch}/${kubernetes_version}"
+  target="${cache_dir}/${binary_name}"
+
+  if [[ -x "${target}" ]]; then
+    return 0
+  fi
+
+  mkdir -p "${cache_dir}"
+  tmp="${target}.download"
+  base_url="https://dl.k8s.io/release/${kubernetes_version}/bin/linux/${arch}/${binary_name}"
+
+  echo "Caching Kubernetes binary for minikube: ${binary_name} ${kubernetes_version}"
+  curl -fsSL --retry 5 --retry-delay 5 -o "${tmp}" "${base_url}"
+  expected="$(curl -fsSL --retry 5 --retry-delay 5 "${base_url}.sha256" | tr -d '[:space:]')"
+  actual="$(shasum -a 256 "${tmp}" | awk '{print $1}')"
+  if [[ "${actual}" != "${expected}" ]]; then
+    rm -f "${tmp}"
+    echo "Error: checksum mismatch for ${binary_name} ${kubernetes_version}." >&2
+    return 1
+  fi
+
+  chmod +x "${tmp}"
+  mv "${tmp}" "${target}"
+}
+
+ensure_minikube_image_cached() {
+  local image="${1}"
+  local cache_path
+
+  require_cmd docker
+
+  cache_path="$(minikube_image_cache_path "${image}")"
+  if [[ -s "${cache_path}" ]]; then
+    return 0
+  fi
+
+  ensure_host_image "${image}"
+  mkdir -p "$(dirname "${cache_path}")"
+  echo "Caching bootstrap image for minikube: ${image}"
+  docker save -o "${cache_path}" "${image}"
+}
+
+preload_minikube_bootstrap_assets() {
+  local kubernetes_version="${1}"
+  local binary_name
+  local image
+
+  if [[ "${MINIKUBE_PRELOAD_BOOTSTRAP_ASSETS:-1}" != "1" ]]; then
+    return 0
+  fi
+
+  for binary_name in kubeadm kubelet kubectl; do
+    ensure_minikube_binary_cached "${kubernetes_version}" "${binary_name}"
+  done
+
+  while IFS= read -r image; do
+    [[ -z "${image}" ]] && continue
+    ensure_minikube_image_cached "${image}"
+  done < <(minikube_core_images "${kubernetes_version}")
 }
 
 compute_file_hash() {
