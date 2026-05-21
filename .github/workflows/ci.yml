@@ -648,6 +648,7 @@ jobs:
       - frontend-image
       - argocd-deploy
       - observability-verify
+      - hpa-validate
     if: always()
     steps:
       - uses: actions/checkout@v6
@@ -662,12 +663,13 @@ jobs:
           FRONTEND_IMG_RESULT: ${{ needs.frontend-image.result }}
           DEPLOY_RESULT: ${{ needs.argocd-deploy.result }}
           OBS_RESULT: ${{ needs.observability-verify.result }}
+          HPA_RESULT: ${{ needs.hpa-validate.result }}
         run: |
           chmod +x scripts/notify_telegram.sh
-          summary="backend-test=${BACKEND_TEST_RESULT};frontend-test=${FRONTEND_TEST_RESULT};sonar-scan=${SONAR_RESULT};backend-image=${BACKEND_IMG_RESULT};frontend-image=${FRONTEND_IMG_RESULT};argocd-deploy=${DEPLOY_RESULT};observability-verify=${OBS_RESULT}"
+          summary="backend-test=${BACKEND_TEST_RESULT};frontend-test=${FRONTEND_TEST_RESULT};sonar-scan=${SONAR_RESULT};backend-image=${BACKEND_IMG_RESULT};frontend-image=${FRONTEND_IMG_RESULT};argocd-deploy=${DEPLOY_RESULT};observability-verify=${OBS_RESULT};hpa-validate=${HPA_RESULT}"
 
           overall="success"
-          for r in "${BACKEND_TEST_RESULT}" "${FRONTEND_TEST_RESULT}" "${SONAR_RESULT}" "${BACKEND_IMG_RESULT}" "${FRONTEND_IMG_RESULT}" "${DEPLOY_RESULT}" "${OBS_RESULT}"; do
+          for r in "${BACKEND_TEST_RESULT}" "${FRONTEND_TEST_RESULT}" "${SONAR_RESULT}" "${BACKEND_IMG_RESULT}" "${FRONTEND_IMG_RESULT}" "${DEPLOY_RESULT}" "${OBS_RESULT}" "${HPA_RESULT}"; do
             case "${r}" in
               failure) overall="failure" ;;
               cancelled) [[ "${overall}" != "failure" ]] && overall="cancelled" ;;
