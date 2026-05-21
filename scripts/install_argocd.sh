@@ -124,7 +124,7 @@ patch_argocd_image_pull_policy() {
   local d current
   local need_patch=0
   for d in argocd-server argocd-repo-server argocd-applicationset-controller \
-           argocd-notifications-controller argocd-dex-server; do
+           argocd-notifications-controller argocd-dex-server argocd-redis; do
     current="$(kubectl -n "${ARGOCD_NAMESPACE}" get deploy "${d}" \
       -o jsonpath='{.spec.template.spec.containers[0].imagePullPolicy}' 2>/dev/null || true)"
     if [[ -n "${current}" && "${current}" != "IfNotPresent" ]]; then
@@ -145,11 +145,16 @@ patch_argocd_image_pull_policy() {
   else
     echo "Setting imagePullPolicy=IfNotPresent on Argo CD workloads..."
     for d in argocd-server argocd-repo-server argocd-applicationset-controller \
-             argocd-notifications-controller argocd-dex-server; do
+             argocd-notifications-controller argocd-dex-server argocd-redis; do
       if kubectl -n "${ARGOCD_NAMESPACE}" get deploy "${d}" >/dev/null 2>&1; then
         kubectl -n "${ARGOCD_NAMESPACE}" patch deploy "${d}" --type=json \
           -p='[{"op":"replace","path":"/spec/template/spec/containers/0/imagePullPolicy","value":"IfNotPresent"}]' \
           >/dev/null 2>&1 || true
+        if [[ "${d}" == "argocd-redis" ]]; then
+          kubectl -n "${ARGOCD_NAMESPACE}" patch deploy "${d}" --type=json \
+            -p='[{"op":"replace","path":"/spec/template/spec/initContainers/0/imagePullPolicy","value":"IfNotPresent"}]' \
+            >/dev/null 2>&1 || true
+        fi
       fi
     done
     if kubectl -n "${ARGOCD_NAMESPACE}" get statefulset argocd-application-controller >/dev/null 2>&1; then
@@ -168,6 +173,18 @@ patch_argocd_image_pull_policy() {
   if [[ -n "${stuck}" ]]; then
     echo "Force-deleting stuck pods: ${stuck}"
     printf '%s\n' "${stuck}" | xargs -n 1 kubectl -n "${ARGOCD_NAMESPACE}" delete pod --grace-period=0 --force --wait=false >/dev/null 2>&1 || true
+  fi
+}
+
+recover_argocd_unhealthy_pods() {
+  local unhealthy
+  unhealthy="$(kubectl -n "${ARGOCD_NAMESPACE}" get pods --no-headers 2>/dev/null \
+    | awk '$1 ~ /^argocd-/ && $3 ~ /^(Completed|Error|CrashLoopBackOff|ImagePullBackOff|ErrImagePull|CreateContainerConfigError)$/ {print $1}')"
+  if [[ -n "${unhealthy}" ]]; then
+    echo "Deleting unhealthy Argo CD pods so controllers recreate them:"
+    printf '%s\n' "${unhealthy}"
+    printf '%s\n' "${unhealthy}" \
+      | xargs -n 1 kubectl -n "${ARGOCD_NAMESPACE}" delete pod --grace-period=0 --force --wait=false >/dev/null 2>&1 || true
   fi
 }
 
@@ -204,14 +221,33 @@ configure_argocd_workloads_proxy() {
 }
 
 wait_for_argocd_ready() {
+  local attempt d failed
+
   echo "Waiting for Argo CD core components to roll out..."
-  for d in argocd-server argocd-repo-server argocd-application-controller argocd-applicationset-controller argocd-redis argocd-dex-server argocd-notifications-controller; do
-    if kubectl -n "${ARGOCD_NAMESPACE}" get deploy "${d}" >/dev/null 2>&1; then
-      kubectl -n "${ARGOCD_NAMESPACE}" rollout status "deploy/${d}" --timeout=300s || true
-    elif kubectl -n "${ARGOCD_NAMESPACE}" get statefulset "${d}" >/dev/null 2>&1; then
-      kubectl -n "${ARGOCD_NAMESPACE}" rollout status "statefulset/${d}" --timeout=300s || true
+  recover_argocd_unhealthy_pods
+
+  for attempt in 1 2; do
+    failed=0
+    for d in argocd-server argocd-repo-server argocd-application-controller argocd-applicationset-controller argocd-redis argocd-dex-server argocd-notifications-controller; do
+      if kubectl -n "${ARGOCD_NAMESPACE}" get deploy "${d}" >/dev/null 2>&1; then
+        kubectl -n "${ARGOCD_NAMESPACE}" rollout status "deploy/${d}" --timeout=300s || failed=1
+      elif kubectl -n "${ARGOCD_NAMESPACE}" get statefulset "${d}" >/dev/null 2>&1; then
+        kubectl -n "${ARGOCD_NAMESPACE}" rollout status "statefulset/${d}" --timeout=300s || failed=1
+      fi
+    done
+
+    if [[ "${failed}" == "0" ]]; then
+      return 0
     fi
+
+    echo "Argo CD rollout check failed; retrying after pod recovery..."
+    recover_argocd_unhealthy_pods
+    sleep 10
   done
+
+  echo "Error: Argo CD core components did not become ready." >&2
+  kubectl -n "${ARGOCD_NAMESPACE}" get pods >&2 || true
+  return 1
 }
 
 configure_insecure_server() {
@@ -278,7 +314,12 @@ print_initial_credentials() {
   echo
   echo "Argo CD UI:       http://127.0.0.1:${ARGOCD_LOCAL_PORT}"
   echo "Argo CD username: admin"
-  echo "Argo CD password: ${password}"
+  if [[ -n "${GITHUB_ACTIONS:-}" ]]; then
+    echo "::add-mask::${password}"
+    echo "Argo CD password: use 'kubectl -n argocd get secret argocd-initial-admin-secret -o jsonpath={.data.password} | base64 -d'"
+  else
+    echo "Argo CD password: ${password}"
+  fi
   echo
 }
 

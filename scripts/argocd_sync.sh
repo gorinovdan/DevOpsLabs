@@ -13,17 +13,11 @@ ARGOCD_NAMESPACE="${ARGOCD_NAMESPACE:-argocd}"
 APP_NAME="${ARGOCD_APP_NAME:-flowboard}"
 BACKEND_IMAGE="${BACKEND_IMAGE:?BACKEND_IMAGE is required}"
 FRONTEND_IMAGE="${FRONTEND_IMAGE:?FRONTEND_IMAGE is required}"
-ARGOCD_BIN="${ARGOCD_BIN:-argocd}"
 ARGOCD_SYNC_TIMEOUT="${ARGOCD_SYNC_TIMEOUT:-600}"
 
 source "${ROOT_DIR}/scripts/lib_minikube.sh"
 
 require_cmd kubectl
-
-if ! command -v "${ARGOCD_BIN}" >/dev/null 2>&1; then
-  echo "Error: argocd CLI not found on PATH. Install via 'brew install argocd' or set ARGOCD_BIN." >&2
-  exit 1
-fi
 
 echo "Verifying Application '${APP_NAME}' exists..."
 if ! kubectl -n "${ARGOCD_NAMESPACE}" get application.argoproj.io "${APP_NAME}" >/dev/null 2>&1; then
@@ -45,35 +39,9 @@ for d in argocd-repo-server argocd-application-controller argocd-server argocd-r
   fi
 done
 
-# Use --core mode so argocd CLI talks directly to the cluster API rather
-# than requiring a logged-in argocd-server session over HTTPS.
-ARGO_FLAGS=(--core --grpc-web --plaintext)
-
-# argocd --core reads argocd-cm from the kubeconfig's current namespace,
-# so point at argocd for the duration of the sync.
-PRIOR_NS="$(kubectl config view --minify --output 'jsonpath={..namespace}' 2>/dev/null || true)"
-kubectl config set-context --current --namespace="${ARGOCD_NAMESPACE}" >/dev/null
-restore_namespace() {
-  if [[ -n "${PRIOR_NS}" ]]; then
-    kubectl config set-context --current --namespace="${PRIOR_NS}" >/dev/null 2>&1 || true
-  else
-    kubectl config set-context --current --namespace=default >/dev/null 2>&1 || true
-  fi
-}
-trap restore_namespace EXIT
-
-# argocd CLI talks to the local cluster (kubernetes.default.svc), but the
-# host shell may have HTTP/SOCKS proxy env set for outbound traffic. Strip
-# proxy so argocd does not tunnel cluster API calls through it.
+# The host shell may have HTTP/SOCKS proxy env set for outbound traffic.
+# Strip proxy so kubectl does not tunnel local cluster API calls through it.
 unset HTTP_PROXY HTTPS_PROXY ALL_PROXY http_proxy https_proxy all_proxy
-
-# In --core mode the argocd CLI runs an in-process argocd-server. Its
-# default 60s gRPC deadline to the in-cluster argocd-repo-server is too
-# tight: every `app set --kustomize-image <new SHA>` triggers a fresh
-# kustomize render through host proxy that takes 60-90s. Bump to 300s so
-# cold renders no longer fail with DeadlineExceeded. (Cluster-side
-# argocd-server is already patched to the same value via install_argocd.)
-export ARGOCD_SERVER_REPO_SERVER_TIMEOUT_SECONDS="${ARGOCD_SERVER_REPO_SERVER_TIMEOUT_SECONDS:-300}"
 
 # Patch the Application's kustomize image overrides directly via the
 # Kubernetes API. `argocd app set --kustomize-image` runs validation
@@ -87,6 +55,7 @@ kubectl -n "${ARGOCD_NAMESPACE}" patch application "${APP_NAME}" --type=merge -p
 {"spec":{"source":{"kustomize":{"images":["ghcr.io/gorinovdan/devopslabs/backend=${BACKEND_IMAGE}","ghcr.io/gorinovdan/devopslabs/frontend=${FRONTEND_IMAGE}"]}}}}
 EOF
 )"
+kubectl -n "${ARGOCD_NAMESPACE}" annotate application "${APP_NAME}" argocd.argoproj.io/refresh=hard --overwrite >/dev/null
 
 # The Application has syncPolicy.automated.{prune,selfHeal}=true so the
 # argocd-application-controller picks up the new spec automatically and
@@ -96,32 +65,35 @@ EOF
 # checkout is in a transient bad state. Trust the controller instead.
 
 echo "Waiting for Argo CD Application '${APP_NAME}' to become Healthy..."
-# We only wait for --health here. Argo CD's comparator can mark Deployments
-# OutOfSync due to schema-level differences (e.g. terminatingReplicas added
-# in newer apiserver) even when the live state matches the rendered manifest
-# byte-for-byte; the --sync wait then loops indefinitely for those false
-# positives. Health is the authoritative signal that the workloads are up.
-#
-# Retry the argocd CLI call: it has a strict selector check that fails
-# with "cannot find ready pod" if argocd-repo-server is mid-rollout
-# even though `kubectl rollout status` already returned OK. A few-second
-# wait clears the race.
-wait_attempts=5
-for attempt in $(seq 1 "${wait_attempts}"); do
-  if "${ARGOCD_BIN}" app wait "${APP_NAME}" \
-       "${ARGO_FLAGS[@]}" \
-       --health \
-       --timeout "${ARGOCD_SYNC_TIMEOUT}"; then
+deadline=$((SECONDS + ARGOCD_SYNC_TIMEOUT))
+while (( SECONDS < deadline )); do
+  health="$(kubectl -n "${ARGOCD_NAMESPACE}" get application "${APP_NAME}" -o jsonpath='{.status.health.status}' 2>/dev/null || true)"
+  sync="$(kubectl -n "${ARGOCD_NAMESPACE}" get application "${APP_NAME}" -o jsonpath='{.status.sync.status}' 2>/dev/null || true)"
+  phase="$(kubectl -n "${ARGOCD_NAMESPACE}" get application "${APP_NAME}" -o jsonpath='{.status.operationState.phase}' 2>/dev/null || true)"
+  backend_live="$(kubectl -n flowboard get deployment backend -o jsonpath='{.spec.template.spec.containers[0].image}' 2>/dev/null || true)"
+  frontend_live="$(kubectl -n flowboard get deployment frontend -o jsonpath='{.spec.template.spec.containers[0].image}' 2>/dev/null || true)"
+
+  if [[ "${health}" == "Healthy" \
+     && "${sync}" == "Synced" \
+     && "${phase}" != "Running" \
+     && "${backend_live}" == "${BACKEND_IMAGE}" \
+     && "${frontend_live}" == "${FRONTEND_IMAGE}" ]]; then
+    kubectl -n flowboard rollout status deploy/backend --timeout=120s
+    kubectl -n flowboard rollout status deploy/frontend --timeout=120s
     break
   fi
-  if [[ "${attempt}" -eq "${wait_attempts}" ]]; then
-    echo "Error: 'argocd app wait --health' failed after ${wait_attempts} attempts." >&2
-    exit 1
-  fi
-  echo "  app wait attempt ${attempt} failed (likely repo-server pod transitioning), retrying in 10s..."
+
+  echo "  status: health=${health:-unknown}, sync=${sync:-unknown}, phase=${phase:-unknown}, backend=${backend_live:-missing}, frontend=${frontend_live:-missing}"
   sleep 10
 done
 
+if (( SECONDS >= deadline )); then
+  echo "Error: Application '${APP_NAME}' did not converge within ${ARGOCD_SYNC_TIMEOUT}s." >&2
+  kubectl -n "${ARGOCD_NAMESPACE}" get application "${APP_NAME}" -o yaml >&2 || true
+  kubectl -n flowboard get deploy,pods -o wide >&2 || true
+  exit 1
+fi
+
 echo
 echo "Argo CD sync completed. Application status:"
-"${ARGOCD_BIN}" app get "${APP_NAME}" "${ARGO_FLAGS[@]}"
+kubectl -n "${ARGOCD_NAMESPACE}" get application "${APP_NAME}" -o wide

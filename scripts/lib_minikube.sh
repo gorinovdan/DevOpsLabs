@@ -529,6 +529,7 @@ EOF
 
   local current
   current="$(run_minikube ssh -- "sudo cat /etc/systemd/system/docker.service.d/http-proxy.conf 2>/dev/null" 2>/dev/null || true)"
+  current="${current//$'\r'/}"
   if [[ "${current}" == "${desired_block}"* ]]; then
     return 0
   fi
