@@ -57,6 +57,8 @@ jobs:
               - 'scripts/**'
             ci:
               - '.github/workflows/**'
+              - '.github/actionlint.yaml'
+              - 'sonar-project.properties'
 
   notify-start:
     runs-on: ubuntu-latest
