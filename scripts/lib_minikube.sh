@@ -163,14 +163,41 @@ start_minikube_profile() {
   local cpus="${2:-4}"
   local memory="${3:-6144}"
   local wait_timeout="${MINIKUBE_WAIT_TIMEOUT:-6m0s}"
+  local kubernetes_version="${MINIKUBE_KUBERNETES_VERSION:-v1.31.6}"
 
   run_minikube start \
     --driver="${driver}" \
     --cpus="${cpus}" \
     --memory="${memory}" \
+    --kubernetes-version="${kubernetes_version}" \
     --delete-on-failure=true \
     --wait=apiserver,kubelet,system_pods \
     --wait-timeout="${wait_timeout}"
+}
+
+minikube_profile_kubernetes_version() {
+  local profile="${MINIKUBE_PROFILE:-minikube}"
+
+  if ! command -v jq >/dev/null 2>&1; then
+    return 0
+  fi
+
+  run_minikube profile list -o json 2>/dev/null \
+    | jq -r --arg profile "${profile}" \
+      '.valid[]? | select(.Name == $profile) | (.Config.KubernetesConfig.KubernetesVersion // .Config.Nodes[0].KubernetesVersion // "")' \
+    | head -n 1
+}
+
+minikube_profile_version_mismatch() {
+  local desired_version="${1}"
+  local current_version=""
+
+  if [[ -z "${desired_version}" ]]; then
+    return 1
+  fi
+
+  current_version="$(minikube_profile_kubernetes_version || true)"
+  [[ -n "${current_version}" && "${current_version}" != "${desired_version}" ]]
 }
 
 compute_file_hash() {
@@ -303,8 +330,15 @@ ensure_minikube_running() {
   local cpus="${3:-4}"
   local memory="${4:-6144}"
   local status_text=""
+  local kubernetes_version="${MINIKUBE_KUBERNETES_VERSION:-v1.31.6}"
 
   status_text="$(minikube_status_text)"
+
+  if [[ "${auto_start}" == "1" ]] && minikube_profile_version_mismatch "${kubernetes_version}"; then
+    echo "Existing minikube profile uses Kubernetes $(minikube_profile_kubernetes_version); expected ${kubernetes_version}; resetting it before start." >&2
+    reset_minikube_profile
+    status_text="$(minikube_status_text)"
+  fi
 
   if run_minikube status >/dev/null 2>&1; then
     configure_minikube_docker_proxy || true
