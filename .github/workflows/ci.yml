@@ -37,7 +37,7 @@ jobs:
       infra: ${{ steps.filter.outputs.infra }}
       ci: ${{ steps.filter.outputs.ci }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           fetch-depth: 0
 
@@ -63,7 +63,7 @@ jobs:
     needs: changes
     if: always()
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Notify Telegram - pipeline started
         env:
@@ -85,9 +85,9 @@ jobs:
       run:
         working-directory: backend
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v6
         with:
           go-version-file: backend/go.mod
           cache-dependency-path: backend/go.sum
@@ -112,7 +112,7 @@ jobs:
         run: go tool cover -func=coverage.out | tail -1
 
       - name: Upload backend coverage
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: backend-coverage
           path: |
@@ -145,9 +145,9 @@ jobs:
       run:
         working-directory: frontend
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v6
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: "npm"
@@ -163,7 +163,7 @@ jobs:
         run: npm run build
 
       - name: Upload frontend coverage
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: frontend-coverage
           path: frontend/coverage/lcov.info
@@ -192,7 +192,7 @@ jobs:
       group: local-sonar-scan
       cancel-in-progress: false
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           fetch-depth: 0
 
@@ -200,13 +200,13 @@ jobs:
         run: chmod +x scripts/*.sh
 
       - name: Download backend coverage
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: backend-coverage
           path: backend
 
       - name: Download frontend coverage
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: frontend-coverage
           path: frontend/coverage
@@ -313,7 +313,7 @@ jobs:
       sha_tag: ${{ steps.build.outputs.sha_tag }}
       latest_tag: ${{ steps.build.outputs.latest_tag }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Ensure scripts are executable
         run: chmod +x scripts/*.sh
@@ -377,7 +377,7 @@ jobs:
       sha_tag: ${{ steps.build.outputs.sha_tag }}
       latest_tag: ${{ steps.build.outputs.latest_tag }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Ensure scripts are executable
         run: chmod +x scripts/*.sh
@@ -450,7 +450,7 @@ jobs:
       backend_image: ${{ steps.images.outputs.backend }}
       frontend_image: ${{ steps.images.outputs.frontend }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Ensure scripts are executable
         run: chmod +x scripts/*.sh
@@ -590,7 +590,7 @@ jobs:
       group: local-minikube-deploy
       cancel-in-progress: false
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Ensure scripts are executable
         run: chmod +x scripts/*.sh
@@ -617,7 +617,7 @@ jobs:
       group: local-minikube-deploy
       cancel-in-progress: false
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Ensure scripts are executable
         run: chmod +x scripts/*.sh
@@ -645,7 +645,7 @@ jobs:
       - observability-verify
     if: always()
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Notify Telegram - pipeline summary
         env:
