@@ -813,6 +813,9 @@ ensure_port_forward() {
   local listener_pid=""
   local listener_cmd=""
   local health_url=""
+  local start_attempt=""
+  local start_attempts="${PORT_FORWARD_START_ATTEMPTS:-3}"
+  local started_pid=""
 
   mkdir -p "${state_dir}"
   if [[ -n "${health_path}" ]]; then
@@ -852,24 +855,36 @@ ensure_port_forward() {
     return 1
   fi
 
-  echo "Starting port-forward ${name}: http://127.0.0.1:${local_port} -> service/${service}:${remote_port}"
-  start_detached_command \
-    "${log_file}" \
-    kubectl -n "${namespace}" port-forward "service/${service}" "${local_port}:${remote_port}" --address 127.0.0.1 \
-    > "${pid_file}"
+  for start_attempt in $(seq 1 "${start_attempts}"); do
+    echo "Starting port-forward ${name} (attempt ${start_attempt}/${start_attempts}): http://127.0.0.1:${local_port} -> service/${service}:${remote_port}"
+    : > "${log_file}"
+    start_detached_command \
+      "${log_file}" \
+      kubectl -n "${namespace}" port-forward "service/${service}" "${local_port}:${remote_port}" --address 127.0.0.1 \
+      > "${pid_file}"
 
-  # Apiserver SPDY upgrade is flaky right after Docker Desktop or minikube
-  # restart, so first health-probe attempts may timeout even though the
-  # listener is up. Tolerate transient failures: if the listener is up
-  # we already have a working port-forward, the health probe is just a
-  # readiness signal — bail to a warning after 30s rather than burning
-  # 4.5 min on every cold port-forward.
-  if wait_for_local_port "${local_port}" 127.0.0.1 30 && { [[ -z "${health_url}" ]] || wait_for_http_endpoint "${health_url}" 30; }; then
-    return 0
-  fi
+    if wait_for_local_port "${local_port}" 127.0.0.1 30; then
+      if [[ -z "${health_url}" ]] || wait_for_http_endpoint "${health_url}" 30; then
+        return 0
+      fi
 
-  echo "Warning: port-forward ${name} listener is up but health probe ${health_url} did not respond yet. Continuing." >&2
-  return 0
+      echo "Warning: port-forward ${name} listener is up but health probe ${health_url} did not respond yet. Continuing." >&2
+      return 0
+    fi
+
+    started_pid="$(cat "${pid_file}" 2>/dev/null || true)"
+    terminate_pid "${started_pid}"
+    rm -f "${pid_file}"
+    echo "Warning: port-forward ${name} did not open local port ${local_port}." >&2
+    if [[ -s "${log_file}" ]]; then
+      echo "Recent ${name} port-forward log:" >&2
+      tail -n 20 "${log_file}" >&2 || true
+    fi
+    sleep 2
+  done
+
+  echo "Error: port-forward ${name} did not open local port ${local_port} after ${start_attempts} attempts." >&2
+  return 1
 }
 
 stop_port_forward() {
