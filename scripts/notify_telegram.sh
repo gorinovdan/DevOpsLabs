@@ -7,6 +7,8 @@ set -euo pipefail
 #   TELEGRAM_BOT_TOKEN  - Telegram bot token from BotFather (e.g. "12345:ABC...").
 #
 # Optional environment variables:
+#   TELEGRAM_CHAT_IDS         - explicit recipient chat ids, separated by
+#                               commas, semicolons, whitespace, or newlines.
 #   TELEGRAM_CHATS_FILE       - persistent cache of chat ids (default
 #                               "${HOME}/.flowboard-telegram-chats.txt").
 #   TELEGRAM_API              - override Telegram API root.
@@ -27,6 +29,7 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 TELEGRAM_BOT_TOKEN="${TELEGRAM_BOT_TOKEN:-}"
+TELEGRAM_CHAT_IDS="${TELEGRAM_CHAT_IDS:-}"
 TELEGRAM_API="${TELEGRAM_API:-https://api.telegram.org}"
 TELEGRAM_NOTIFY_DISABLE="${TELEGRAM_NOTIFY_DISABLE:-0}"
 TELEGRAM_CHATS_FILE="${TELEGRAM_CHATS_FILE:-${HOME}/.flowboard-telegram-chats.txt}"
@@ -177,6 +180,11 @@ mkdir -p "$(dirname "${TELEGRAM_CHATS_FILE}")"
 touch "${TELEGRAM_CHATS_FILE}"
 
 # Step 1 - poll getUpdates and collect distinct chat ids from any recent activity.
+configured_ids=""
+if [[ -n "${TELEGRAM_CHAT_IDS}" ]]; then
+  configured_ids="$(printf '%s\n' "${TELEGRAM_CHAT_IDS}" | tr ',; ' '\n' | awk 'NF')"
+fi
+
 discovered_ids=""
 if updates_payload="$(curl -fsS --max-time 10 "${TELEGRAM_API}/bot${TELEGRAM_BOT_TOKEN}/getUpdates" 2>/dev/null)"; then
   if printf '%s' "${updates_payload}" | jq -e '.ok == true' >/dev/null 2>&1; then
@@ -197,9 +205,10 @@ else
 fi
 
 # Step 2 - merge discovered ids into the persistent cache.
-if [[ -n "${discovered_ids}" ]]; then
+if [[ -n "${configured_ids}${discovered_ids}" ]]; then
   {
     cat "${TELEGRAM_CHATS_FILE}"
+    printf '%s\n' "${configured_ids}"
     printf '%s\n' "${discovered_ids}"
   } | awk 'NF && !seen[$0]++' > "${TELEGRAM_CHATS_FILE}.tmp"
   mv "${TELEGRAM_CHATS_FILE}.tmp" "${TELEGRAM_CHATS_FILE}"

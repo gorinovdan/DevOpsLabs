@@ -27,6 +27,7 @@ concurrency:
 
 env:
   NODE_VERSION: "20"
+  TELEGRAM_CHAT_IDS: ${{ secrets.TELEGRAM_CHAT_IDS }}
 
 jobs:
   changes:
